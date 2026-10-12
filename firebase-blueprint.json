@@ -1,0 +1,136 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Teacher profile",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string", "maxLength": 100 },
+        "email": { "type": "string", "maxLength": 150 },
+        "photoURL": { "type": "string", "maxLength": 500 },
+        "role": { "type": "string", "enum": ["teacher", "admin"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "email"]
+    },
+    "Game": {
+      "title": "Game",
+      "description": "Quiz game metadata and settings",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string", "maxLength": 150 },
+        "description": { "type": "string", "maxLength": 1000 },
+        "subject": { "type": "string", "maxLength": 100 },
+        "grade": { "type": "string", "maxLength": 50 },
+        "topic": { "type": "string", "maxLength": 100 },
+        "ownerId": { "type": "string" },
+        "ownerName": { "type": "string", "maxLength": 100 },
+        "visibility": { "type": "string", "enum": ["public", "private"] },
+        "coverImage": { "type": "string" },
+        "questionCount": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["title", "ownerId", "visibility"]
+    },
+    "Question": {
+      "title": "Question",
+      "description": "Question card in a game",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "gameId": { "type": "string" },
+        "question": { "type": "string", "maxLength": 1000 },
+        "type": { "type": "string", "enum": ["mcq", "true_false", "short_answer", "text", "image", "special"] },
+        "options": { "type": "array" },
+        "correctAnswer": { "type": "string" },
+        "points": { "type": "number" },
+        "timer": { "type": "number" },
+        "imageUrl": { "type": "string" },
+        "specialType": { "type": "string" },
+        "order": { "type": "number" }
+      },
+      "required": ["gameId", "question", "type", "points"]
+    },
+    "GameSession": {
+      "title": "GameSession",
+      "description": "Active or completed live multiplayer game session",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "pin": { "type": "string", "maxLength": 10 },
+        "gameId": { "type": "string" },
+        "gameTitle": { "type": "string", "maxLength": 150 },
+        "hostId": { "type": "string" },
+        "hostName": { "type": "string", "maxLength": 100 },
+        "status": { "type": "string", "enum": ["waiting", "lobby", "playing", "question_open", "answering", "answer_locked", "answer_revealed", "scoring", "board", "finished"] },
+        "currentQuestionId": { "type": "string" },
+        "currentTeamId": { "type": "string" },
+        "answeredQuestions": { "type": "array" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["pin", "gameId", "hostId", "status"]
+    },
+    "GameAction": {
+      "title": "GameAction",
+      "description": "Logged scoring or power-up event for audit and undo",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "sessionId": { "type": "string" },
+        "type": { "type": "string" },
+        "teamId": { "type": "string" },
+        "teamName": { "type": "string" },
+        "amount": { "type": "number" },
+        "previousScore": { "type": "number" },
+        "newScore": { "type": "number" },
+        "description": { "type": "string", "maxLength": 250 },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["sessionId", "type", "teamId", "amount", "timestamp"]
+    },
+    "GameResult": {
+      "title": "GameResult",
+      "description": "Saved summary statistics of a finished game",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "sessionId": { "type": "string" },
+        "gameId": { "type": "string" },
+        "gameTitle": { "type": "string" },
+        "hostId": { "type": "string" },
+        "winnerTeam": { "type": "string" },
+        "playedAt": { "type": "string" }
+      },
+      "required": ["sessionId", "gameId", "hostId"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "User" },
+      "description": "User profile data for teachers"
+    },
+    "/games/{gameId}": {
+      "schema": { "$ref": "Game" },
+      "description": "Created quiz games"
+    },
+    "/games/{gameId}/questions/{questionId}": {
+      "schema": { "$ref": "Question" },
+      "description": "Questions inside a quiz game"
+    },
+    "/gameSessions/{sessionId}": {
+      "schema": { "$ref": "GameSession" },
+      "description": "Live classroom quiz session state"
+    },
+    "/gameSessions/{sessionId}/actions/{actionId}": {
+      "schema": { "$ref": "GameAction" },
+      "description": "Score actions and power-up history for a session"
+    },
+    "/gameResults/{resultId}": {
+      "schema": { "$ref": "GameResult" },
+      "description": "Finished game reports and statistics"
+    }
+  }
+}

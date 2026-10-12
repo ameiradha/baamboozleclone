@@ -1,0 +1,69 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Test connection probe
+    match /test/{docId} {
+      allow read: if true;
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // User profiles
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isOwner(userId);
+    }
+
+    // Games library
+    match /games/{gameId} {
+      allow read: if resource.data.visibility == 'public' || (isSignedIn() && resource.data.ownerId == request.auth.uid);
+      allow create: if isSignedIn() && request.resource.data.ownerId == request.auth.uid;
+      allow update, delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+
+      match /questions/{questionId} {
+        allow read: if true;
+        allow write: if isSignedIn();
+      }
+    }
+
+    // Top-level questions collection for backwards compatibility
+    match /questions/{questionId} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    // Live Game Sessions
+    match /gameSessions/{sessionId} {
+      allow read: if true;
+      allow create: if isSignedIn();
+      allow update: if true;
+      allow delete: if isSignedIn() && resource.data.hostId == request.auth.uid;
+
+      match /actions/{actionId} {
+        allow read: if true;
+        allow write: if true;
+      }
+
+      match /players/{playerId} {
+        allow read: if true;
+        allow write: if true;
+      }
+    }
+
+    // Game Results & Statistics
+    match /gameResults/{resultId} {
+      allow read: if true;
+      allow write: if true;
+    }
+  }
+}

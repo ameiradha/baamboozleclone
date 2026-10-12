@@ -1,0 +1,8 @@
+{
+  "name": "QuizBattle Classroom",
+  "description": "Interactive classroom team quiz game with dynamic boards, power-ups, real-time multiplayer, and comprehensive teacher controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
