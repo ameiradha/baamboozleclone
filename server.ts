@@ -260,7 +260,14 @@ Allowed question types to include: ${types.join(', ')}. Please balance the reque
     res.json({ questions: finalQuestions });
   } catch (error: any) {
     console.error('Error generating quiz questions via Gemini:', error);
-    res.status(500).json({ error: error.message || 'Failed to generate questions. Please try again.' });
+    let errMsg = error?.message || 'Failed to generate questions. Please try again.';
+    try {
+      if (typeof errMsg === 'string' && (errMsg.startsWith('{') || errMsg.includes('{"error"'))) {
+        const parsed = JSON.parse(errMsg);
+        if (parsed?.error?.message) errMsg = parsed.error.message;
+      }
+    } catch (_) {}
+    res.status(500).json({ error: errMsg });
   }
 });
 

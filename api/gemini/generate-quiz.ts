@@ -145,12 +145,13 @@ Grade level: ${grade || 'General'}
 Subject: ${subject || 'General'}
 Allowed question types to include: ${types.join(', ')}. Please balance the requested types across the questions.${uniquenessConstraint}`;
 
-      const candidateModels = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+      const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
       let batchResponse: any = null;
       let lastError: any = null;
 
       for (const modelName of candidateModels) {
         try {
+          console.log(`[Vercel API] Generating batch pass ${batchIndex + 1} with model: ${modelName}`);
           batchResponse = await ai.models.generateContent({
             model: modelName,
             contents: userPrompt,
@@ -218,6 +219,7 @@ Allowed question types to include: ${types.join(', ')}. Please balance the reque
 
           if (batchResponse) break;
         } catch (err: any) {
+          console.warn(`[Vercel API] Model ${modelName} failed:`, err?.message || err);
           lastError = err;
         }
       }
@@ -253,8 +255,15 @@ Allowed question types to include: ${types.join(', ')}. Please balance the reque
     return res.status(200).json({ questions: finalQuestions });
   } catch (error: any) {
     console.error('Error generating quiz questions on Vercel:', error);
+    let errMsg = error?.message || 'Failed to generate questions. Please check your Gemini API key.';
+    try {
+      if (typeof errMsg === 'string' && (errMsg.startsWith('{') || errMsg.includes('{"error"'))) {
+        const parsed = JSON.parse(errMsg);
+        if (parsed?.error?.message) errMsg = parsed.error.message;
+      }
+    } catch (_) {}
     return res.status(500).json({
-      error: error.message || 'Failed to generate questions. Please check your Gemini API key.',
+      error: errMsg,
     });
   }
 }
