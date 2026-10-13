@@ -36,6 +36,7 @@ import { sound } from '../../services/soundService';
 import { useAuth } from '../../context/AuthContext';
 import { CsvImportModal } from './CsvImportModal';
 import { QuestionPreviewModal } from './QuestionPreviewModal';
+import { generateFallbackQuizQuestions } from '../../utils/fallbackQuizGenerator';
 
 interface GameEditorProps {
   initialGame?: Game | null;
@@ -123,6 +124,7 @@ export const GameEditor: React.FC<GameEditorProps> = ({
   const [aiMergeMode, setAiMergeMode] = useState<'append' | 'replace'>('append');
   const [isGenerating, setIsGenerating] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [aiBannerNotice, setAiBannerNotice] = useState<string | null>(null);
 
   const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
 
@@ -389,7 +391,148 @@ export const GameEditor: React.FC<GameEditorProps> = ({
     return true;
   };
 
-  // AI Quiz Generation via Gemini
+  // Helper to format, apply, and integrate generated questions
+  const applyGeneratedQuestions = (rawQuestions: any[], isFallback: boolean = false, fallbackReason: string = '') => {
+    if (!rawQuestions || rawQuestions.length === 0) {
+      throw new Error('No questions available to format.');
+    }
+
+    const baseGameId = initialGame?.id || 'new_game';
+    const formattedQuestions: Question[] = rawQuestions.map((q: any, idx: number) => {
+      const qId = `q_ai_${Date.now()}_${idx}`;
+      const points = q.points || 10;
+      const timer = q.timer || 30;
+      const explanation = q.explanation || '';
+      
+      let type: QuestionType = 'mcq';
+      if (q.type === 'true_false') type = 'true_false';
+      else if (q.type === 'short_answer') type = 'short_answer';
+
+      let options: McqOption[] | undefined;
+      let correctOptionId: string | undefined;
+      let correctAnswerText: string | undefined;
+
+      if (type === 'mcq') {
+        options = (q.options || []).slice(0, 4).map((opt: any, oIdx: number) => ({
+          id: opt.id || `opt_${oIdx + 1}`,
+          text: opt.text || `Option ${oIdx + 1}`,
+        }));
+        if (options && options.length > 0) {
+          correctOptionId = q.correctOptionId || options[0].id;
+        } else {
+          options = [
+            { id: 'opt_1', text: 'Option A' },
+            { id: 'opt_2', text: 'Option B' }
+          ];
+          correctOptionId = 'opt_1';
+        }
+      } else if (type === 'true_false') {
+        options = [
+          { id: 'opt_t', text: 'TRUE' },
+          { id: 'opt_f', text: 'FALSE' },
+        ];
+        correctOptionId = q.correctOptionId === 'opt_f' ? 'opt_f' : 'opt_t';
+      } else if (type === 'short_answer') {
+        correctAnswerText = q.correctAnswerText || q.question || '';
+      }
+
+      return {
+        id: qId,
+        gameId: baseGameId,
+        order: idx + 1,
+        question: q.question || 'Untitled Question',
+        type,
+        points,
+        timer,
+        options,
+        correctOptionId,
+        correctAnswerText,
+        explanation,
+      };
+    });
+
+    if (formattedQuestions.length === 0) {
+      throw new Error('AI did not generate any valid questions.');
+    }
+
+    if (aiMergeMode === 'replace') {
+      formattedQuestions.forEach((q, i) => {
+        q.order = i + 1;
+      });
+      setQuestions(formattedQuestions);
+      setEditingQuestionId(formattedQuestions[0].id);
+    } else {
+      const updatedQuestions = [...questions];
+      if (updatedQuestions.length + formattedQuestions.length > 100) {
+        const allowedCount = 100 - updatedQuestions.length;
+        if (allowedCount <= 0) {
+          throw new Error('Your quiz already has 100 questions. Delete some questions first or choose Replace Strategy.');
+        }
+        formattedQuestions.splice(allowedCount);
+        alert(`Only ${allowedCount} questions were appended to keep the quiz within the 100-question limit.`);
+      }
+      formattedQuestions.forEach((q) => {
+        q.order = updatedQuestions.length + 1;
+        updatedQuestions.push(q);
+      });
+      setQuestions(updatedQuestions);
+      setEditingQuestionId(formattedQuestions[0].id);
+    }
+
+    // Auto-populate metadata if currently blank
+    if (!title || title.toLowerCase().includes('untitled') || title.toLowerCase() === 'new game') {
+      setTitle(`AI Quiz: ${aiTopic}`);
+    }
+    if (!topic) {
+      setTopic(aiTopic);
+    }
+    if (!grade) {
+      setGrade(aiGrade);
+    }
+    if (!subject) {
+      setSubject(aiSubject);
+    }
+
+    setSaveStatus('unsaved');
+    sound.playVictory();
+    setShowAiGenerateModal(false);
+
+    if (isFallback) {
+      setAiBannerNotice(
+        `⚡ Mod Kesinambungan (Fallback): ${formattedQuestions.length} soalan telah dijana untuk topik "${aiTopic}". ${fallbackReason ? `(${fallbackReason})` : ''} Anda boleh menyemak dan mengubah suai soalan pada bila-bila masa.`
+      );
+    } else {
+      setAiBannerNotice(null);
+    }
+  };
+
+  // Instant Fallback Generator (Bypass network entirely)
+  const handleGenerateFallbackOnly = () => {
+    if (!aiTopic.trim()) {
+      setAiError('Please enter a topic for the quiz.');
+      return;
+    }
+    if (aiTypes.length === 0) {
+      setAiError('Please select at least one question type.');
+      return;
+    }
+    sound.playClick();
+    setAiError(null);
+    try {
+      const fallbackList = generateFallbackQuizQuestions(
+        aiTopic.trim(),
+        aiCount,
+        aiSubject,
+        aiGrade,
+        aiTypes
+      );
+      applyGeneratedQuestions(fallbackList, true, 'Dijana pantas melalui sistem modul kurikulum setempat');
+    } catch (err: any) {
+      setAiError(err.message || 'Gagal menjana soalan fallback.');
+    }
+  };
+
+  // AI Quiz Generation via Gemini with automatic fallback on timeout (HTTP 504) or network failure
   const handleGenerateAiQuiz = async () => {
     if (!aiTopic.trim()) {
       setAiError('Please enter a topic for the quiz.');
@@ -404,145 +547,87 @@ export const GameEditor: React.FC<GameEditorProps> = ({
     setAiError(null);
     sound.playClick();
 
+    let rawQuestions: any[] = [];
+    let isFallback = false;
+    let fallbackReason = '';
+
     try {
-      const response = await fetch('/api/gemini/generate-quiz', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          topic: aiTopic.trim(),
-          grade: aiGrade,
-          subject: aiSubject,
-          count: aiCount,
-          types: aiTypes,
-        }),
-      });
+      let response: Response | null = null;
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 12000); // 12-second client timeout safeguard
 
-      if (!response.ok) {
-        let errorMsg = `Server error (HTTP ${response.status})`;
-        try {
-          const errData = await response.json();
-          if (errData?.error) errorMsg = errData.error;
-        } catch {
-          if (response.status === 404) {
-            errorMsg = 'AI Generator endpoint not found (HTTP 404). If on Vercel, please redeploy with the new api/ and vercel.json files.';
-          } else if (response.status === 504) {
-            errorMsg = 'AI Generation timed out (HTTP 504). Try selecting fewer questions (e.g., 5-15) and try again.';
-          }
-        }
-        throw new Error(errorMsg);
-      }
-
-      const data = await response.json();
-      if (!data.questions || !Array.isArray(data.questions)) {
-        throw new Error('Invalid quiz format returned by AI.');
-      }
-
-      // Convert generated questions to our Question interface
-      const baseGameId = initialGame?.id || 'new_game';
-      const formattedQuestions: Question[] = data.questions.map((q: any, idx: number) => {
-        const qId = `q_ai_${Date.now()}_${idx}`;
-        const points = q.points || 10;
-        const timer = q.timer || 30;
-        const explanation = q.explanation || '';
-        
-        let type: QuestionType = 'mcq';
-        if (q.type === 'true_false') type = 'true_false';
-        else if (q.type === 'short_answer') type = 'short_answer';
-
-        let options: McqOption[] | undefined;
-        let correctOptionId: string | undefined;
-        let correctAnswerText: string | undefined;
-
-        if (type === 'mcq') {
-          options = (q.options || []).slice(0, 4).map((opt: any, oIdx: number) => ({
-            id: opt.id || `opt_${oIdx + 1}`,
-            text: opt.text || `Option ${oIdx + 1}`,
-          }));
-          if (options && options.length > 0) {
-            correctOptionId = q.correctOptionId || options[0].id;
-          } else {
-            options = [
-              { id: 'opt_1', text: 'Option A' },
-              { id: 'opt_2', text: 'Option B' }
-            ];
-            correctOptionId = 'opt_1';
-          }
-        } else if (type === 'true_false') {
-          options = [
-            { id: 'opt_t', text: 'TRUE' },
-            { id: 'opt_f', text: 'FALSE' },
-          ];
-          correctOptionId = q.correctOptionId === 'opt_f' ? 'opt_f' : 'opt_t';
-        } else if (type === 'short_answer') {
-          correctAnswerText = q.correctAnswerText || q.question || '';
-        }
-
-        return {
-          id: qId,
-          gameId: baseGameId,
-          order: idx + 1,
-          question: q.question || 'Untitled Question',
-          type,
-          points,
-          timer,
-          options,
-          correctOptionId,
-          correctAnswerText,
-          explanation,
-        };
-      });
-
-      if (formattedQuestions.length === 0) {
-        throw new Error('AI did not generate any questions.');
-      }
-
-      if (aiMergeMode === 'replace') {
-        formattedQuestions.forEach((q, i) => {
-          q.order = i + 1;
+        response = await fetch('/api/gemini/generate-quiz', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            topic: aiTopic.trim(),
+            grade: aiGrade,
+            subject: aiSubject,
+            count: aiCount,
+            types: aiTypes,
+          }),
+          signal: controller.signal,
         });
-        setQuestions(formattedQuestions);
-        setEditingQuestionId(formattedQuestions[0].id);
+        clearTimeout(timeoutId);
+      } catch (fetchErr: any) {
+        console.warn('Network or timeout during AI request:', fetchErr);
+        isFallback = true;
+        fallbackReason = 'Masa tamat sambungan pelayan';
+      }
+
+      if (response && response.ok) {
+        const data = await response.json();
+        if (data.questions && Array.isArray(data.questions) && data.questions.length > 0) {
+          rawQuestions = data.questions;
+          if (data.fallbackUsed) {
+            isFallback = true;
+            fallbackReason = data.errorNotice || 'Pelayan Vercel mengaktifkan mod fallback';
+          }
+        } else {
+          isFallback = true;
+          fallbackReason = 'Respons kosong dari AI';
+        }
       } else {
-        const updatedQuestions = [...questions];
-        if (updatedQuestions.length + formattedQuestions.length > 100) {
-          const allowedCount = 100 - updatedQuestions.length;
-          if (allowedCount <= 0) {
-            throw new Error('Your quiz already has 100 questions. Delete some questions first or choose Replace Strategy.');
-          }
-          formattedQuestions.splice(allowedCount); // truncate elements above allowed size
-          alert(`Only ${allowedCount} questions were appended to keep the quiz within the 100-question limit.`);
-        }
-        formattedQuestions.forEach((q) => {
-          q.order = updatedQuestions.length + 1;
-          updatedQuestions.push(q);
-        });
-        setQuestions(updatedQuestions);
-        setEditingQuestionId(formattedQuestions[0].id);
+        // HTTP 504 Gateway Timeout or server error -> Activate fallback seamlessly
+        isFallback = true;
+        const status = response ? response.status : 504;
+        fallbackReason = status === 504
+          ? 'Pelayan Vercel mengalami masa tamat (HTTP 504)'
+          : `Ralat pelayan (HTTP ${status})`;
       }
 
-      // Also auto-populate main metadata if they are currently blank/untitled
-      if (!title || title.toLowerCase().includes('untitled') || title.toLowerCase() === 'new game') {
-        setTitle(`AI Quiz: ${aiTopic}`);
-      }
-      if (!topic) {
-        setTopic(aiTopic);
-      }
-      if (!grade) {
-        setGrade(aiGrade);
-      }
-      if (!subject) {
-        setSubject(aiSubject);
+      // If network timed out or failed, generate curriculum questions via fallback
+      if (isFallback || rawQuestions.length === 0) {
+        console.info(`[Quiz AI] Activating fallback generator for topic "${aiTopic.trim()}" (${fallbackReason})`);
+        rawQuestions = generateFallbackQuizQuestions(
+          aiTopic.trim(),
+          aiCount,
+          aiSubject,
+          aiGrade,
+          aiTypes
+        );
       }
 
-      setSaveStatus('unsaved');
-      sound.playVictory();
-      setShowAiGenerateModal(false);
+      applyGeneratedQuestions(rawQuestions, isFallback, fallbackReason);
     } catch (err: any) {
-      console.error('AI quiz generation error:', err);
-      setAiError(err.message || 'An error occurred during generation.');
-      sound.playIncorrect();
+      console.error('AI quiz generation error, attempting emergency fallback:', err);
+      // Emergency fallback even on unexpected exceptions
+      try {
+        const emergencyList = generateFallbackQuizQuestions(
+          aiTopic.trim(),
+          aiCount,
+          aiSubject,
+          aiGrade,
+          aiTypes
+        );
+        applyGeneratedQuestions(emergencyList, true, 'Emergency fallback activated');
+      } catch (finalErr: any) {
+        setAiError(finalErr.message || 'An error occurred during generation.');
+        sound.playIncorrect();
+      }
     } finally {
       setIsGenerating(false);
     }
@@ -706,6 +791,22 @@ export const GameEditor: React.FC<GameEditorProps> = ({
         <div className="mb-2 p-2 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold flex items-center gap-2 shrink-0 animate-in fade-in">
           <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
           <span>{validationError}</span>
+        </div>
+      )}
+
+      {aiBannerNotice && (
+        <div className="mb-2 p-3 rounded-xl bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-300 text-amber-950 text-xs font-semibold flex items-center justify-between gap-3 shrink-0 shadow-2xs animate-in fade-in">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <Zap className="w-4.5 h-4.5 shrink-0 text-amber-600 animate-pulse" />
+            <span className="truncate sm:whitespace-normal">{aiBannerNotice}</span>
+          </div>
+          <button
+            onClick={() => setAiBannerNotice(null)}
+            className="p-1 hover:bg-amber-100 rounded-lg text-amber-700 hover:text-amber-900 transition-colors cursor-pointer shrink-0"
+            title="Tutup notis"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
       )}
 
@@ -1396,9 +1497,19 @@ export const GameEditor: React.FC<GameEditorProps> = ({
               /* Input/Configuration Form */
               <div className="p-6 sm:p-8 space-y-5 text-left">
                 {aiError && (
-                  <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold flex items-center gap-2.5 animate-in fade-in">
-                    <AlertCircle className="w-4.5 h-4.5 text-rose-600 shrink-0" />
-                    <span>{aiError}</span>
+                  <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold flex flex-col gap-2.5 animate-in fade-in">
+                    <div className="flex items-center gap-2.5">
+                      <AlertCircle className="w-4.5 h-4.5 text-rose-600 shrink-0" />
+                      <span>{aiError}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleGenerateFallbackOnly}
+                      className="mt-0.5 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-xs cursor-pointer self-start transition-all"
+                    >
+                      <Zap className="w-3.5 h-3.5" />
+                      <span>⚡ Jana Dengan Mod Fallback Segera (Tanpa Had Masa)</span>
+                    </button>
                   </div>
                 )}
 
@@ -1591,27 +1702,40 @@ export const GameEditor: React.FC<GameEditorProps> = ({
                 </div>
 
                 {/* Footer Controls */}
-                <div className="pt-4 border-t border-slate-100 flex justify-end gap-3">
+                <div className="pt-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
                   <button
                     type="button"
                     disabled={isGenerating}
-                    onClick={() => {
-                      sound.playClick();
-                      setShowAiGenerateModal(false);
-                    }}
-                    className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 font-extrabold text-xs cursor-pointer"
+                    onClick={handleGenerateFallbackOnly}
+                    className="px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-800 font-extrabold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                    title="Jana pantas secara terus tanpa risiko masa tamat pelayan"
                   >
-                    Cancel
+                    <Zap className="w-3.5 h-3.5 text-amber-600" />
+                    <span>⚡ Mod Fallback Segera</span>
                   </button>
-                  <button
-                    type="button"
-                    disabled={isGenerating}
-                    onClick={handleGenerateAiQuiz}
-                    className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 text-white hover:from-purple-700 hover:to-indigo-700 shadow-md font-extrabold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
-                  >
-                    <Sparkles className="w-4 h-4 text-amber-300 animate-pulse" />
-                    <span>GENERATE QUESTIONS</span>
-                  </button>
+
+                  <div className="flex items-center gap-2.5">
+                    <button
+                      type="button"
+                      disabled={isGenerating}
+                      onClick={() => {
+                        sound.playClick();
+                        setShowAiGenerateModal(false);
+                      }}
+                      className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 font-extrabold text-xs cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isGenerating}
+                      onClick={handleGenerateAiQuiz}
+                      className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 text-white hover:from-purple-700 hover:to-indigo-700 shadow-md font-extrabold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                    >
+                      <Sparkles className="w-4 h-4 text-amber-300 animate-pulse" />
+                      <span>GENERATE QUESTIONS</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             )}

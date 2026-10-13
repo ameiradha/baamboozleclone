@@ -1,5 +1,7 @@
 import { GoogleGenAI, Type } from '@google/genai';
+import { generateFallbackQuizQuestions } from '../../src/utils/fallbackQuizGenerator';
 
+export const maxDuration = 60;
 export const config = {
   maxDuration: 60,
 };
@@ -32,10 +34,17 @@ export default async function handler(req: any, res: any) {
 
   const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
   if (!apiKey) {
-    return res.status(500).json({
-      error: 'GEMINI_API_KEY is not configured in Vercel. Please add GEMINI_API_KEY in Vercel Project Settings > Environment Variables, then Redeploy your project.',
+    console.warn('[Vercel API] GEMINI_API_KEY is not configured, activating fallback generator.');
+    const fallbackQuestions = generateFallbackQuizQuestions(topic, targetCount, subject, grade, types);
+    return res.status(200).json({
+      questions: fallbackQuestions,
+      fallbackUsed: true,
+      errorNotice: 'GEMINI_API_KEY is not configured in Vercel. Generated questions using curriculum fallback system.',
     });
   }
+
+  const functionStartTime = Date.now();
+  const TIME_BUDGET_MS = 8500; // Return gracefully before Vercel 10s timeout
 
   try {
     const ai = new GoogleGenAI({
@@ -60,7 +69,7 @@ Supported question types are:
 
 The tone of questions and explanations should be highly engaging, enthusiastic, and suitable for the selected grade level. Ensure all option text, correct options, and answers are fully filled out and correct. Do not use markdown inside any of the returned strings.`;
 
-    const batchSize = Math.min(25, targetCount);
+    const batchSize = Math.min(20, targetCount);
     const totalBatches = Math.ceil(targetCount / batchSize);
     const collectedQuestions: any[] = [];
     const seenNormalized = new Set<string>();
@@ -119,15 +128,21 @@ The tone of questions and explanations should be highly engaging, enthusiastic, 
     ];
 
     let batchIndex = 0;
-    const maxAttempts = totalBatches + 2;
+    const maxAttempts = totalBatches + 1;
 
     while (collectedQuestions.length < targetCount && batchIndex < maxAttempts) {
+      // Check time budget to prevent Vercel 504 Gateway Timeout
+      if (Date.now() - functionStartTime > TIME_BUDGET_MS) {
+        console.warn(`[Vercel API] Approaching time limit (${Date.now() - functionStartTime}ms). Exiting loop early to prevent 504.`);
+        break;
+      }
+
       const remainingNeeded = targetCount - collectedQuestions.length;
       const currentBatchCount = Math.min(batchSize, remainingNeeded);
       const angle = subtopicAngles[batchIndex % subtopicAngles.length];
 
       const existingSummary = collectedQuestions
-        .slice(-60)
+        .slice(-40)
         .map((q, idx) => `${idx + 1}. ${q.question}`)
         .join('\n');
 
@@ -145,11 +160,18 @@ Grade level: ${grade || 'General'}
 Subject: ${subject || 'General'}
 Allowed question types to include: ${types.join(', ')}. Please balance the requested types across the questions.${uniquenessConstraint}`;
 
-      const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+      // Ultra-fast flash models first to prevent serverless timeout
+      const candidateModels = ['gemini-flash-latest', 'gemini-3.1-flash-lite', 'gemini-3.8-flash'];
       let batchResponse: any = null;
       let lastError: any = null;
 
       for (const modelName of candidateModels) {
+        // Double check time before making external API call
+        if (Date.now() - functionStartTime > TIME_BUDGET_MS) {
+          console.warn('[Vercel API] Budget reached before calling next model.');
+          break;
+        }
+
         try {
           console.log(`[Vercel API] Generating batch pass ${batchIndex + 1} with model: ${modelName}`);
           batchResponse = await ai.models.generateContent({
@@ -247,8 +269,17 @@ Allowed question types to include: ${types.join(', ')}. Please balance the reque
       batchIndex++;
     }
 
-    if (collectedQuestions.length === 0) {
-      throw new Error('Could not generate questions. Please try again with a different topic.');
+    // If we need more questions to meet the requested target count, fill seamlessly using fallback
+    if (collectedQuestions.length < targetCount) {
+      const needed = targetCount - collectedQuestions.length;
+      console.log(`[Vercel API] Filling remaining ${needed} questions using fallback generator...`);
+      const fillQuestions = generateFallbackQuizQuestions(topic, needed, subject, grade, types);
+      for (const fq of fillQuestions) {
+        if (collectedQuestions.length >= targetCount) break;
+        if (!isDuplicateOrTooSimilar(fq.question, collectedQuestions)) {
+          collectedQuestions.push(fq);
+        }
+      }
     }
 
     const finalQuestions = collectedQuestions.slice(0, targetCount);
@@ -262,8 +293,14 @@ Allowed question types to include: ${types.join(', ')}. Please balance the reque
         if (parsed?.error?.message) errMsg = parsed.error.message;
       }
     } catch (_) {}
-    return res.status(500).json({
-      error: errMsg,
+
+    // Fallback: Return guaranteed curriculum questions so user's game creation never fails
+    console.warn('[Vercel API] Returning fallback questions due to error:', errMsg);
+    const fallbackList = generateFallbackQuizQuestions(topic, targetCount, subject, grade, types);
+    return res.status(200).json({
+      questions: fallbackList,
+      fallbackUsed: true,
+      errorNotice: errMsg,
     });
   }
 }
