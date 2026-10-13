@@ -19,34 +19,44 @@ export function generateFallbackQuizQuestions(
   targetCount: number = 5,
   subject: string = '',
   grade: string = '',
-  types: string[] = ['mcq', 'true_false', 'short_answer']
+  types: string[] = ['mcq', 'true_false', 'short_answer'],
+  language: string = 'ms'
 ): GeneratedQuestion[] {
   const cleanTopic = (topic || 'General Knowledge').trim();
   const count = Math.min(Math.max(targetCount, 1), 100);
   const activeTypes = types.length > 0 ? types : ['mcq', 'true_false', 'short_answer'];
 
-  // Detect Malay vs English
-  const combinedText = `${cleanTopic} ${subject} ${grade}`.toLowerCase();
-  const isMalay = /[a-z]/i.test(cleanTopic) && (
-    combinedText.includes('tahun') ||
-    combinedText.includes('tingkatan') ||
-    combinedText.includes('sains') ||
-    combinedText.includes('sejarah') ||
-    combinedText.includes('matematik') ||
-    combinedText.includes('geografi') ||
-    combinedText.includes('bahasa') ||
-    combinedText.includes('pendidikan') ||
-    combinedText.includes('haiwan') ||
-    combinedText.includes('tumbuhan') ||
-    combinedText.includes('alam') ||
-    combinedText.includes('sistem') ||
-    combinedText.includes('tenaga') ||
-    combinedText.includes('daya') ||
-    combinedText.includes('cahaya') ||
-    combinedText.includes('udara') ||
-    combinedText.includes('bumi') ||
-    combinedText.includes('manusia')
-  );
+  // Determine language: explicit selection prioritized
+  let isMalay = true;
+  const langLower = (language || '').toLowerCase().trim();
+  if (langLower === 'en' || langLower === 'english') {
+    isMalay = false;
+  } else if (langLower === 'ms' || langLower === 'malay' || langLower.includes('melayu')) {
+    isMalay = true;
+  } else {
+    // Detect Malay vs English based on text
+    const combinedText = `${cleanTopic} ${subject} ${grade}`.toLowerCase();
+    isMalay = /[a-z]/i.test(cleanTopic) && (
+      combinedText.includes('tahun') ||
+      combinedText.includes('tingkatan') ||
+      combinedText.includes('sains') ||
+      combinedText.includes('sejarah') ||
+      combinedText.includes('matematik') ||
+      combinedText.includes('geografi') ||
+      combinedText.includes('bahasa') ||
+      combinedText.includes('pendidikan') ||
+      combinedText.includes('haiwan') ||
+      combinedText.includes('tumbuhan') ||
+      combinedText.includes('alam') ||
+      combinedText.includes('sistem') ||
+      combinedText.includes('tenaga') ||
+      combinedText.includes('daya') ||
+      combinedText.includes('cahaya') ||
+      combinedText.includes('udara') ||
+      combinedText.includes('bumi') ||
+      combinedText.includes('manusia')
+    );
+  }
 
   const questions: GeneratedQuestion[] = [];
   const usedQuestions = new Set<string>();

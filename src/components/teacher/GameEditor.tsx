@@ -21,7 +21,8 @@ import {
   Zap,
   Check,
   X,
-  Loader2
+  Loader2,
+  Globe
 } from 'lucide-react';
 import {
   Game,
@@ -119,6 +120,7 @@ export const GameEditor: React.FC<GameEditorProps> = ({
   const [aiTopic, setAiTopic] = useState(topic || '');
   const [aiGrade, setAiGrade] = useState(grade || 'Year 2');
   const [aiSubject, setAiSubject] = useState(subject || 'Science');
+  const [aiLanguage, setAiLanguage] = useState<'ms' | 'en'>('ms');
   const [aiCount, setAiCount] = useState(10);
   const [aiTypes, setAiTypes] = useState<QuestionType[]>(['mcq', 'true_false', 'short_answer']);
   const [aiMergeMode, setAiMergeMode] = useState<'append' | 'replace'>('append');
@@ -131,9 +133,16 @@ export const GameEditor: React.FC<GameEditorProps> = ({
   // Rotate loading messages when generating
   useEffect(() => {
     let interval: any;
-    const messages = [
+    const messages = aiLanguage === 'ms' ? [
+      "Menjana soalan kuiz unik (sehingga 100 soalan)...",
+      "Membentuk cabaran pembelajaran berkualiti dalam Bahasa Melayu...",
+      "Menyemak buku rujukan dan sukatan kurikulum Malaysia...",
+      "Menyediakan pilihan jawapan pengganggu yang bersesuaian...",
+      "Mengesahkan skema jawapan dan ketepatan fakta...",
+      "Menerapkan penerangan yang mudah difahami murid..."
+    ] : [
       "Generating unique questions (up to 100)...",
-      "Formulating diverse educational challenges...",
+      "Formulating diverse educational challenges in English...",
       "Ensuring each question is distinct with zero repeats...",
       "Drafting varied incorrect option distractors...",
       "Verifying answer keys across all topics...",
@@ -147,7 +156,7 @@ export const GameEditor: React.FC<GameEditorProps> = ({
       setLoadingMsgIdx(0);
     }
     return () => clearInterval(interval);
-  }, [isGenerating]);
+  }, [isGenerating, aiLanguage]);
 
   // Auto-select first question or create default if empty
   useEffect(() => {
@@ -427,10 +436,19 @@ export const GameEditor: React.FC<GameEditorProps> = ({
           correctOptionId = 'opt_1';
         }
       } else if (type === 'true_false') {
-        options = [
-          { id: 'opt_t', text: 'TRUE' },
-          { id: 'opt_f', text: 'FALSE' },
-        ];
+        const isMalay = aiLanguage === 'ms';
+        // Preserve question options if already returned, otherwise provide standard localized TRUE/FALSE or BENAR/PALSU
+        if (q.options && Array.isArray(q.options) && q.options.length >= 2) {
+          options = q.options.map((opt: any) => ({
+            id: opt.id,
+            text: opt.text || (opt.id === 'opt_t' ? (isMalay ? 'BENAR' : 'TRUE') : (isMalay ? 'PALSU' : 'FALSE')),
+          }));
+        } else {
+          options = [
+            { id: 'opt_t', text: isMalay ? 'BENAR' : 'TRUE' },
+            { id: 'opt_f', text: isMalay ? 'PALSU' : 'FALSE' },
+          ];
+        }
         correctOptionId = q.correctOptionId === 'opt_f' ? 'opt_f' : 'opt_t';
       } else if (type === 'short_answer') {
         correctAnswerText = q.correctAnswerText || q.question || '';
@@ -481,7 +499,7 @@ export const GameEditor: React.FC<GameEditorProps> = ({
 
     // Auto-populate metadata if currently blank
     if (!title || title.toLowerCase().includes('untitled') || title.toLowerCase() === 'new game') {
-      setTitle(`AI Quiz: ${aiTopic}`);
+      setTitle(aiLanguage === 'ms' ? `Kuiz: ${aiTopic}` : `AI Quiz: ${aiTopic}`);
     }
     if (!topic) {
       setTopic(aiTopic);
@@ -498,8 +516,11 @@ export const GameEditor: React.FC<GameEditorProps> = ({
     setShowAiGenerateModal(false);
 
     if (isFallback) {
+      const isMalay = aiLanguage === 'ms';
       setAiBannerNotice(
-        `⚡ Mod Kesinambungan (Fallback): ${formattedQuestions.length} soalan telah dijana untuk topik "${aiTopic}". ${fallbackReason ? `(${fallbackReason})` : ''} Anda boleh menyemak dan mengubah suai soalan pada bila-bila masa.`
+        isMalay
+          ? `⚡ Mod Kesinambungan (Fallback): ${formattedQuestions.length} soalan telah dijana dalam Bahasa Melayu untuk topik "${aiTopic}". ${fallbackReason ? `(${fallbackReason})` : ''} Anda boleh menyemak dan mengubah suai soalan pada bila-bila masa.`
+          : `⚡ Continuity Mode (Fallback): ${formattedQuestions.length} questions generated in English for topic "${aiTopic}". ${fallbackReason ? `(${fallbackReason})` : ''} You can review and edit questions at any time.`
       );
     } else {
       setAiBannerNotice(null);
@@ -524,9 +545,16 @@ export const GameEditor: React.FC<GameEditorProps> = ({
         aiCount,
         aiSubject,
         aiGrade,
-        aiTypes
+        aiTypes,
+        aiLanguage
       );
-      applyGeneratedQuestions(fallbackList, true, 'Dijana pantas melalui sistem modul kurikulum setempat');
+      applyGeneratedQuestions(
+        fallbackList,
+        true,
+        aiLanguage === 'ms'
+          ? 'Dijana pantas melalui sistem modul kurikulum setempat (Bahasa Melayu)'
+          : 'Instantly generated via local curriculum module (English)'
+      );
     } catch (err: any) {
       setAiError(err.message || 'Gagal menjana soalan fallback.');
     }
@@ -568,6 +596,7 @@ export const GameEditor: React.FC<GameEditorProps> = ({
             subject: aiSubject,
             count: aiCount,
             types: aiTypes,
+            language: aiLanguage,
           }),
           signal: controller.signal,
         });
@@ -601,13 +630,14 @@ export const GameEditor: React.FC<GameEditorProps> = ({
 
       // If network timed out or failed, generate curriculum questions via fallback
       if (isFallback || rawQuestions.length === 0) {
-        console.info(`[Quiz AI] Activating fallback generator for topic "${aiTopic.trim()}" (${fallbackReason})`);
+        console.info(`[Quiz AI] Activating fallback generator for topic "${aiTopic.trim()}" (${aiLanguage}) (${fallbackReason})`);
         rawQuestions = generateFallbackQuizQuestions(
           aiTopic.trim(),
           aiCount,
           aiSubject,
           aiGrade,
-          aiTypes
+          aiTypes,
+          aiLanguage
         );
       }
 
@@ -621,7 +651,8 @@ export const GameEditor: React.FC<GameEditorProps> = ({
           aiCount,
           aiSubject,
           aiGrade,
-          aiTypes
+          aiTypes,
+          aiLanguage
         );
         applyGeneratedQuestions(emergencyList, true, 'Emergency fallback activated');
       } catch (finalErr: any) {
@@ -1482,14 +1513,21 @@ export const GameEditor: React.FC<GameEditorProps> = ({
                     Generating Educational Quiz...
                   </h4>
                   <p className="text-xs text-slate-500 font-semibold h-4 transition-all duration-300">
-                    {[
-                      "Formulating educational challenges...",
-                      "Consulting the virtual textbook...",
-                      "Drafting incorrect option distractors...",
+                    {(aiLanguage === 'ms' ? [
+                      "Membentuk cabaran pembelajaran yang menarik...",
+                      "Menyemak buku rujukan dan sukatan kurikulum...",
+                      "Menyediakan soalan dan jawapan dalam Bahasa Melayu...",
+                      "Mengesahkan skema jawapan dan fakta...",
+                      "Mencipta detik pembelajaran bermakna...",
+                      "Menerapkan penerangan yang mudah difahami murid..."
+                    ] : [
+                      "Formulating educational challenges in English...",
+                      "Consulting the virtual textbook and curriculum...",
+                      "Drafting diverse and realistic distractors...",
                       "Verifying answer key consistency...",
                       "Creating classroom magic moments...",
                       "Applying student-friendly explanations..."
-                    ][loadingMsgIdx]}
+                    ])[loadingMsgIdx]}
                   </p>
                 </div>
               </div>
@@ -1514,6 +1552,72 @@ export const GameEditor: React.FC<GameEditorProps> = ({
                 )}
 
                 <div className="space-y-4">
+                  {/* Language Selection: English vs Bahasa Melayu */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-700">
+                        Bahasa Soalan & Jawapan / Language <span className="text-rose-500">*</span>
+                      </label>
+                      <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200/80 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
+                        <Globe className="w-3 h-3 text-indigo-600" />
+                        {aiLanguage === 'ms' ? 'Bahasa Melayu' : 'English'}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          sound.playClick();
+                          setAiLanguage('ms');
+                        }}
+                        className={`p-3 rounded-2xl border-2 text-left transition-all cursor-pointer flex items-center justify-between ${
+                          aiLanguage === 'ms'
+                            ? 'border-indigo-600 bg-indigo-50/70 text-indigo-950 shadow-xs ring-1 ring-indigo-500/20'
+                            : 'border-slate-200 hover:border-slate-300 text-slate-600 bg-white'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <span className="text-2xl select-none" role="img" aria-label="Malaysia">🇲🇾</span>
+                          <div>
+                            <p className="font-extrabold text-xs text-slate-900">Bahasa Melayu</p>
+                            <p className="text-[10px] text-slate-500 font-medium">Soalan & jawapan Bahasa Melayu</p>
+                          </div>
+                        </div>
+                        <div className={`w-4.5 h-4.5 rounded-full border flex items-center justify-center shrink-0 ${
+                          aiLanguage === 'ms' ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-300'
+                        }`}>
+                          {aiLanguage === 'ms' && <Check className="w-3 h-3 stroke-[3]" />}
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          sound.playClick();
+                          setAiLanguage('en');
+                        }}
+                        className={`p-3 rounded-2xl border-2 text-left transition-all cursor-pointer flex items-center justify-between ${
+                          aiLanguage === 'en'
+                            ? 'border-indigo-600 bg-indigo-50/70 text-indigo-950 shadow-xs ring-1 ring-indigo-500/20'
+                            : 'border-slate-200 hover:border-slate-300 text-slate-600 bg-white'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <span className="text-2xl select-none" role="img" aria-label="English">🇬🇧</span>
+                          <div>
+                            <p className="font-extrabold text-xs text-slate-900">English</p>
+                            <p className="text-[10px] text-slate-500 font-medium">Questions & answers in English</p>
+                          </div>
+                        </div>
+                        <div className={`w-4.5 h-4.5 rounded-full border flex items-center justify-center shrink-0 ${
+                          aiLanguage === 'en' ? 'border-indigo-600 bg-indigo-600 text-white' : 'border-slate-300'
+                        }`}>
+                          {aiLanguage === 'en' && <Check className="w-3 h-3 stroke-[3]" />}
+                        </div>
+                      </button>
+                    </div>
+                  </div>
+
                   {/* Topic */}
                   <div>
                     <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-700 mb-1.5">
@@ -1523,7 +1627,11 @@ export const GameEditor: React.FC<GameEditorProps> = ({
                       type="text"
                       value={aiTopic}
                       onChange={(e) => setAiTopic(e.target.value)}
-                      placeholder="e.g. Photosynthesis, Solar System, Ancient Egypt, Decimals"
+                      placeholder={
+                        aiLanguage === 'ms'
+                          ? "Contoh: Fotosintesis, Sistem Suria, Sejarah Melaka, Haiwan Mamalia, Pecahan Wang"
+                          : "e.g. Photosynthesis, Solar System, Ancient Egypt, Decimals, Ecosystems"
+                      }
                       className="w-full p-3 text-sm font-semibold rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 bg-slate-50"
                     />
                   </div>
@@ -1538,7 +1646,7 @@ export const GameEditor: React.FC<GameEditorProps> = ({
                         type="text"
                         value={aiSubject}
                         onChange={(e) => setAiSubject(e.target.value)}
-                        placeholder="Science, Math, Geography..."
+                        placeholder={aiLanguage === 'ms' ? "Sains, Matematik, Sejarah..." : "Science, Math, Geography..."}
                         className="w-full p-2.5 text-xs font-semibold rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 bg-slate-50"
                       />
                     </div>
@@ -1550,7 +1658,7 @@ export const GameEditor: React.FC<GameEditorProps> = ({
                         type="text"
                         value={aiGrade}
                         onChange={(e) => setAiGrade(e.target.value)}
-                        placeholder="Year 2, Grade 5..."
+                        placeholder={aiLanguage === 'ms' ? "Tahun 2, Tingkatan 3..." : "Year 2, Grade 5..."}
                         className="w-full p-2.5 text-xs font-semibold rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 bg-slate-50"
                       />
                     </div>
