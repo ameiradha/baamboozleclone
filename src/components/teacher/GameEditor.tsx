@@ -420,8 +420,18 @@ export const GameEditor: React.FC<GameEditorProps> = ({
       });
 
       if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || 'Failed to generate quiz questions.');
+        let errorMsg = `Server error (HTTP ${response.status})`;
+        try {
+          const errData = await response.json();
+          if (errData?.error) errorMsg = errData.error;
+        } catch {
+          if (response.status === 404) {
+            errorMsg = 'AI Generator endpoint not found (HTTP 404). If on Vercel, please redeploy with the new api/ and vercel.json files.';
+          } else if (response.status === 504) {
+            errorMsg = 'AI Generation timed out (HTTP 504). Try selecting fewer questions (e.g., 5-15) and try again.';
+          }
+        }
+        throw new Error(errorMsg);
       }
 
       const data = await response.json();

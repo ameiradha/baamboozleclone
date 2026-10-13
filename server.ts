@@ -30,8 +30,15 @@ app.post('/api/gemini/generate-quiz', async (req, res) => {
   const targetCount = Math.min(Math.max(parseInt(count, 10) || 5, 1), 100);
 
   try {
+    const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({
+        error: 'GEMINI_API_KEY is not configured. In Vercel, please add GEMINI_API_KEY under Project Settings -> Environment Variables, then Redeploy your project.',
+      });
+    }
+
     const ai = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
+      apiKey,
       httpOptions: {
         headers: {
           'User-Agent': 'aistudio-build',
@@ -259,17 +266,25 @@ Allowed question types to include: ${types.join(', ')}. Please balance the reque
 
 async function startServer() {
   const distPath = path.resolve(__dirname, 'dist');
+  const indexPath = path.resolve(distPath, 'index.html');
+  const isProduction = process.env.NODE_ENV === 'production';
 
-  if (fs.existsSync(distPath)) {
-    // Serve static production build assets
+  if (isProduction && fs.existsSync(indexPath)) {
+    // Serve static production build assets in production
     app.use(express.static(distPath));
 
     // SPA fallback: return index.html for client-side routing
-    app.get('*', (_req, res) => {
-      res.sendFile(path.resolve(distPath, 'index.html'));
+    app.get('*', (_req, res, next) => {
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath, (err) => {
+          if (err) next(err);
+        });
+      } else {
+        next();
+      }
     });
   } else {
-    // Development fallback using Vite middleware
+    // Development or fallback using Vite middleware
     const { createServer } = await import('vite');
     const vite = await createServer({
       server: { middlewareMode: true },
