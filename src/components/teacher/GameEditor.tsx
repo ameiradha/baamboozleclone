@@ -22,7 +22,9 @@ import {
   Check,
   X,
   Loader2,
-  Globe
+  Globe,
+  FileText,
+  Lightbulb
 } from 'lucide-react';
 import {
   Game,
@@ -118,6 +120,7 @@ export const GameEditor: React.FC<GameEditorProps> = ({
   // AI Generator specific states
   const [showAiGenerateModal, setShowAiGenerateModal] = useState(false);
   const [aiTopic, setAiTopic] = useState(topic || '');
+  const [aiPoints, setAiPoints] = useState('');
   const [aiGrade, setAiGrade] = useState(grade || 'Year 2');
   const [aiSubject, setAiSubject] = useState(subject || 'Science');
   const [aiLanguage, setAiLanguage] = useState<'ms' | 'en'>('ms');
@@ -546,7 +549,8 @@ export const GameEditor: React.FC<GameEditorProps> = ({
         aiSubject,
         aiGrade,
         aiTypes,
-        aiLanguage
+        aiLanguage,
+        aiPoints.trim()
       );
       applyGeneratedQuestions(
         fallbackList,
@@ -583,7 +587,7 @@ export const GameEditor: React.FC<GameEditorProps> = ({
       let response: Response | null = null;
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 12000); // 12-second client timeout safeguard
+        const timeoutId = setTimeout(() => controller.abort(), 45000); // 45-second client timeout safeguard
 
         response = await fetch('/api/gemini/generate-quiz', {
           method: 'POST',
@@ -592,6 +596,7 @@ export const GameEditor: React.FC<GameEditorProps> = ({
           },
           body: JSON.stringify({
             topic: aiTopic.trim(),
+            points: aiPoints.trim(),
             grade: aiGrade,
             subject: aiSubject,
             count: aiCount,
@@ -637,7 +642,8 @@ export const GameEditor: React.FC<GameEditorProps> = ({
           aiSubject,
           aiGrade,
           aiTypes,
-          aiLanguage
+          aiLanguage,
+          aiPoints.trim()
         );
       }
 
@@ -652,7 +658,8 @@ export const GameEditor: React.FC<GameEditorProps> = ({
           aiSubject,
           aiGrade,
           aiTypes,
-          aiLanguage
+          aiLanguage,
+          aiPoints.trim()
         );
         applyGeneratedQuestions(emergencyList, true, 'Emergency fallback activated');
       } catch (finalErr: any) {
@@ -1621,7 +1628,7 @@ export const GameEditor: React.FC<GameEditorProps> = ({
                   {/* Topic */}
                   <div>
                     <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-700 mb-1.5">
-                      Quiz Topic / Concept <span className="text-rose-500">*</span>
+                      {aiLanguage === 'ms' ? 'Tajuk Utama Kuiz / Topik' : 'Quiz Topic / Concept'} <span className="text-rose-500">*</span>
                     </label>
                     <input
                       type="text"
@@ -1629,11 +1636,52 @@ export const GameEditor: React.FC<GameEditorProps> = ({
                       onChange={(e) => setAiTopic(e.target.value)}
                       placeholder={
                         aiLanguage === 'ms'
-                          ? "Contoh: Fotosintesis, Sistem Suria, Sejarah Melaka, Haiwan Mamalia, Pecahan Wang"
-                          : "e.g. Photosynthesis, Solar System, Ancient Egypt, Decimals, Ecosystems"
+                          ? "Contoh: Fotosintesis, Haiwan Mamalia, Sistem Suria, Sejarah Melaka, Pecahan Wajar"
+                          : "e.g. Photosynthesis, Mammals, Solar System, Ancient Civilizations, Fractions"
                       }
                       className="w-full p-3 text-sm font-semibold rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 bg-slate-50"
                     />
+                  </div>
+
+                  {/* Key Points / Notes / Reference Points (Point-point khusus) */}
+                  <div className="bg-slate-50/80 p-3.5 rounded-2xl border border-slate-200/90 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wider text-slate-800">
+                        <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                        <span>{aiLanguage === 'ms' ? 'Isi-isi Penting / Nota / Point Rujukan' : 'Key Points / Notes / Reference Bullets'}</span>
+                        <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100/70 px-2 py-0.5 rounded-full lowercase">
+                          {aiLanguage === 'ms' ? 'disyorkan' : 'recommended'}
+                        </span>
+                      </label>
+                      {aiPoints && (
+                        <button
+                          type="button"
+                          onClick={() => setAiPoints('')}
+                          className="text-[11px] text-slate-400 hover:text-rose-600 font-bold transition-colors cursor-pointer"
+                        >
+                          {aiLanguage === 'ms' ? 'Kosongkan' : 'Clear'}
+                        </button>
+                      )}
+                    </div>
+                    <textarea
+                      rows={4}
+                      value={aiPoints}
+                      onChange={(e) => setAiPoints(e.target.value)}
+                      placeholder={
+                        aiLanguage === 'ms'
+                          ? "Tampal atau taip poin fakta/buku teks di sini (1 fakta setiap baris). Contoh:\n• Fotosintesis memerlukan cahaya matahari, air, dan karbon dioksida\n• Klorofil menyerap cahaya di dalam kloroplas daun\n• Menghasilkan glukosa sebagai makanan dan membebaskan gas oksigen\n• Proses berlaku pada waktu siang"
+                          : "Paste or type syllabus facts/bullet points here (one per line). E.g.:\n• Photosynthesis requires sunlight, water, and carbon dioxide\n• Chlorophyll absorbs light inside chloroplasts\n• Produces glucose and releases oxygen gas\n• Occurs during daylight hours"
+                      }
+                      className="w-full p-3 text-xs font-medium rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 bg-white placeholder:text-slate-400 leading-relaxed resize-y"
+                    />
+                    <div className="flex items-start gap-1.5 text-[11px] text-indigo-900 font-medium bg-indigo-50/60 p-2 rounded-lg border border-indigo-100">
+                      <Lightbulb className="w-3.5 h-3.5 shrink-0 text-amber-500 mt-0.5" />
+                      <span>
+                        {aiLanguage === 'ms'
+                          ? 'Soalan yang dijana akan KHUSUS menguji dan merangkumi poin-poin yang anda masukkan di atas.'
+                          : 'Generated questions will be strictly focused on testing the specific points and facts provided above.'}
+                      </span>
+                    </div>
                   </div>
 
                   {/* Two Column Subject & Grade */}
