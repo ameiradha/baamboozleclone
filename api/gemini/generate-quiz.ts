@@ -24,21 +24,18 @@ export default async function handler(req: any, res: any) {
     return res.status(405).json({ error: 'Method Not Allowed. Use POST.' });
   }
 
-  const { topic, points = '', grade, subject, count = 5, types = ['mcq', 'true_false', 'short_answer'], language = 'ms' } = req.body || {};
+  const { topic, grade, subject, count = 5, types = ['mcq', 'true_false', 'short_answer'] } = req.body || {};
 
   if (!topic || typeof topic !== 'string' || !topic.trim()) {
     return res.status(400).json({ error: 'Topic is required.' });
   }
 
   const targetCount = Math.min(Math.max(parseInt(count, 10) || 5, 1), 100);
-  const isMalay = !(language === 'en' || language === 'english');
-  const langLabel = isMalay ? 'Bahasa Melayu' : 'English';
-  const cleanPoints = (typeof points === 'string' ? points : '').trim();
 
   const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
   if (!apiKey) {
     console.warn('[Vercel API] GEMINI_API_KEY is not configured, activating fallback generator.');
-    const fallbackQuestions = generateFallbackQuizQuestions(topic, targetCount, subject, grade, types, language, cleanPoints);
+    const fallbackQuestions = generateFallbackQuizQuestions(topic, targetCount, subject, grade, types);
     return res.status(200).json({
       questions: fallbackQuestions,
       fallbackUsed: true,
@@ -47,7 +44,7 @@ export default async function handler(req: any, res: any) {
   }
 
   const functionStartTime = Date.now();
-  const TIME_BUDGET_MS = 25000; // Allow ample time for Gemini generation
+  const TIME_BUDGET_MS = 8500; // Return gracefully before Vercel 10s timeout
 
   try {
     const ai = new GoogleGenAI({
@@ -59,53 +56,16 @@ export default async function handler(req: any, res: any) {
       },
     });
 
-    const languageInstruction = isMalay
-      ? `MANDAT BAHASA MUTLAK:
-Semua teks soalan, pilihan jawapan (options), jawapan betul, dan penjelasan (explanation) WAJIB dihasilkan sepenuhnya dalam BAHASA MELAYU standard/baku (sesuai untuk sekolah Malaysia).
-Untuk soalan jenis 'true_false', pilihan jawapan MESTI mengandungi tepat 2 pilihan: 'BENAR' (id: 'opt_t') dan 'PALSU' (id: 'opt_f').`
-      : `STRICT LANGUAGE MANDATE:
-All question text, answer options, correct answers, and explanations MUST be written completely in ENGLISH.
-For 'true_false' questions, the two options MUST have text 'TRUE' (id: 'opt_t') and 'FALSE' (id: 'opt_f').`;
-
-    const pointsAdherenceInstruction = cleanPoints
-      ? `CRITICAL MANDATE - STRICT ADHERENCE TO GIVEN POINTS / NOTES:
-The teacher has provided specific points, facts, and syllabus notes below. 
-Every single question MUST be directly generated from and strictly test these provided points:
----
-${cleanPoints}
----
-RULES FOR USING THE GIVEN POINTS:
-1. Every question must test a factual statement, definition, concept, process, or distinction directly stated in the given points.
-2. Formulate questions that check comprehension and recall of these exact points (e.g., asking what something is, which component does what, whether a statement about the point is BENAR/PALSU, or identifying the correct explanation).
-3. Do NOT invent concepts outside these points, except to generate plausible incorrect answer choices (distractors).
-4. If there are multiple bullet points, distribute the questions evenly across all points so the entire list is tested.`
-      : `CRITICAL MANDATE - STRICT ADHERENCE TO TOPIC & SYLLABUS:
-The teacher wants questions specifically testing the topic: "${topic}".
-1. Every question must be a direct, authentic, syllabus-appropriate test question testing real knowledge, concepts, terminology, or application of "${topic}".
-2. STRICTLY FORBIDDEN: NEVER generate vague or trivial meta-questions such as:
-   - "Mengapakah kita perlu belajar topik ini?" / "Why is studying this important?"
-   - "Apakah langkah pertama untuk mengkaji topik ini?" / "What is the first step to study this?"
-   - "Topik ini dipelajari dalam subjek apa?" / "Which subject does this belong to?"
-   - "Adakah topik ini berguna dalam kehidupan?" / "Is this useful in real life?"
-3. ALL questions must be authentic academic test items (such as standard exam / quiz / KBAT questions):
-   - Asking for specific definitions, factual recall, scientific or historical facts, steps in a process, organelle/organ functions, mathematical steps, cause and effect, or classifications.
-4. Distractors (incorrect choices in MCQ) must be realistic, plausible terms from the same educational subject.
-5. For True/False questions, the statement must be an unambiguous factual claim that is definitely true or definitely false based on the curriculum.`;
-
     const systemInstruction = `You are an expert educator, curriculum designer, and school teacher. 
 Your task is to generate high-quality, engaging, grade-appropriate classroom quiz questions and answers.
 CRITICAL MANDATE: Every single question in the returned set MUST be completely UNIQUE, distinct, and explore a different concept, fact, problem variation, or perspective.
 Under NO circumstances repeat questions, create trivial rephrasings, or recycle identical answer choices.
 Each question should be educational, clear, and include a helpful, encouraging explanation of the correct answer.
 
-${languageInstruction}
-
-${pointsAdherenceInstruction}
-
 Supported question types are:
 1. 'mcq': Multiple Choice. Generate 3 to 4 options (standard is 4, e.g. A, B, C, D) with unique IDs ('opt_1', 'opt_2', etc.) and exactly one correct Option ID.
-2. 'true_false': True or False statement. Options must be exactly two elements with ID 'opt_t' (text: ${isMalay ? "'BENAR'" : "'TRUE'"}) and 'opt_f' (text: ${isMalay ? "'PALSU'" : "'FALSE'"}).
-3. 'short_answer': Open-ended question where the student types a short answer. Provide the exact correct answer text in 'correctAnswerText' (e.g. 'Paris' or 'mamalia').
+2. 'true_false': True or False statement. Options must be exactly two elements with ID 'opt_t' (text: 'TRUE') and 'opt_f' (text: 'FALSE').
+3. 'short_answer': Open-ended question where the student types a short answer. Provide the exact correct answer text in 'correctAnswerText' (e.g. 'Paris' or 'mammal').
 
 The tone of questions and explanations should be highly engaging, enthusiastic, and suitable for the selected grade level. Ensure all option text, correct options, and answers are fully filled out and correct. Do not use markdown inside any of the returned strings.`;
 
@@ -125,9 +85,7 @@ The tone of questions and explanations should be highly engaging, enthusiastic, 
       'does', 'doing', 'done', 'have', 'having', 'been', 'were', 'will', 'would',
       'could', 'should', 'each', 'every', 'most', 'some', 'such', 'only', 'same',
       'apakah', 'manakah', 'bagaimanakah', 'mengapakah', 'bilakah', 'dimanakah',
-      'siapakah', 'yang', 'pada', 'dalam', 'untuk', 'dengan', 'dari', 'daripada',
-      'antara', 'berikut', 'pernyataan', 'mengenai', 'adakah', 'adalah', 'ialah',
-      'proses', 'fungsi', 'contoh', 'kesan', 'faktor', 'seperti', 'semasa', 'utama'
+      'siapakah', 'yang', 'pada', 'dalam', 'untuk', 'dengan', 'dari', 'daripada'
     ]);
 
     function getSignificantKeywords(text: string): Set<string> {
@@ -152,28 +110,22 @@ The tone of questions and explanations should be highly engaging, enthusiastic, 
         }
         const union = new Set([...newKeywords, ...existKeywords]).size;
         const jaccard = union > 0 ? intersection / union : 0;
-        if (jaccard > 0.82) {
+        if (jaccard > 0.65) {
           return true;
         }
       }
       return false;
     }
 
-    const curriculumAngles = cleanPoints
-      ? [
-          'Soalan pemahaman terus dan fakta utama daripada poin yang diberi',
-          'Soalan fungsi, proses, atau hubungan sebab-akibat daripada poin yang diberi',
-          'Soalan pengecaman contoh dan aplikasi daripada poin yang diberi',
-          'Soalan analisis, perbandingan, atau perincian daripada poin yang diberi',
-          'Soalan pengukuhan dan semakan ketepatan fakta daripada poin yang diberi'
-        ]
-      : [
-          'Konsep teras, definisi saintifik/akademik, dan istilah utama',
-          'Ciri-ciri khusus, komponen struktur, dan klasifikasi',
-          'Fungsi, peranan, mekanisme, atau cara ia berlaku',
-          'Contoh situasi kehidupan sebenar, aplikasi praktikal, dan pengecaman',
-          'Perbandingan, hubungan sebab-akibat, dan analisis fakta mengikut sukatan pelajaran'
-        ];
+    const subtopicAngles = [
+      'Core definitions, fundamental principles, and essential terminology',
+      'Real-world applications, practical case studies, and everyday examples',
+      'Advanced problem-solving, comparisons, cause-and-effect relationships',
+      'Historical timeline, fascinating trivia, and groundbreaking discoveries',
+      'Critical thinking, common misconceptions, and synthesis problems',
+      'Experimental methods, data interpretation, and quantitative calculations',
+      'Global perspectives, comparative analyses, and interdisciplinary connections'
+    ];
 
     let batchIndex = 0;
     const maxAttempts = totalBatches + 1;
@@ -187,7 +139,7 @@ The tone of questions and explanations should be highly engaging, enthusiastic, 
 
       const remainingNeeded = targetCount - collectedQuestions.length;
       const currentBatchCount = Math.min(batchSize, remainingNeeded);
-      const angle = curriculumAngles[batchIndex % curriculumAngles.length];
+      const angle = subtopicAngles[batchIndex % subtopicAngles.length];
 
       const existingSummary = collectedQuestions
         .slice(-40)
@@ -200,21 +152,16 @@ Under NO circumstances repeat, rephrase, or recycle any of the following questio
 ${existingSummary}
 
 Focus specifically on this distinct angle: "${angle}".
-Every single question MUST present a completely novel question statement, different answer choices, and explore a fresh aspect of the topic or points!`
+Every single question MUST present a completely novel question statement, different answer choices, and explore a fresh aspect of the topic!`
         : `\nPrimary focus area for this set: "${angle}". Ensure all questions are unique, creative, and varied.`;
 
       const userPrompt = `Generate exactly ${currentBatchCount} completely UNIQUE and DIFFERENT quiz questions about the topic: "${topic}".
-${cleanPoints ? `Specific Reference Points to test:
-"""
-${cleanPoints}
-"""` : ''}
-Language: ${langLabel} (ALL question text, answer choices, correct answers, and explanations MUST be in ${langLabel})
 Grade level: ${grade || 'General'}
 Subject: ${subject || 'General'}
 Allowed question types to include: ${types.join(', ')}. Please balance the requested types across the questions.${uniquenessConstraint}`;
 
-      // Candidate models
-      const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+      // Ultra-fast flash models first to prevent serverless timeout
+      const candidateModels = ['gemini-flash-latest', 'gemini-3.1-flash-lite', 'gemini-3.8-flash'];
       let batchResponse: any = null;
       let lastError: any = null;
 
@@ -325,8 +272,8 @@ Allowed question types to include: ${types.join(', ')}. Please balance the reque
     // If we need more questions to meet the requested target count, fill seamlessly using fallback
     if (collectedQuestions.length < targetCount) {
       const needed = targetCount - collectedQuestions.length;
-      console.log(`[Vercel API] Filling remaining ${needed} questions using fallback generator (${langLabel})...`);
-      const fillQuestions = generateFallbackQuizQuestions(topic, needed, subject, grade, types, language, cleanPoints);
+      console.log(`[Vercel API] Filling remaining ${needed} questions using fallback generator...`);
+      const fillQuestions = generateFallbackQuizQuestions(topic, needed, subject, grade, types);
       for (const fq of fillQuestions) {
         if (collectedQuestions.length >= targetCount) break;
         if (!isDuplicateOrTooSimilar(fq.question, collectedQuestions)) {
@@ -348,8 +295,8 @@ Allowed question types to include: ${types.join(', ')}. Please balance the reque
     } catch (_) {}
 
     // Fallback: Return guaranteed curriculum questions so user's game creation never fails
-    console.warn(`[Vercel API] Returning fallback questions (${langLabel}) due to error:`, errMsg);
-    const fallbackList = generateFallbackQuizQuestions(topic, targetCount, subject, grade, types, language, cleanPoints);
+    console.warn('[Vercel API] Returning fallback questions due to error:', errMsg);
+    const fallbackList = generateFallbackQuizQuestions(topic, targetCount, subject, grade, types);
     return res.status(200).json({
       questions: fallbackList,
       fallbackUsed: true,
