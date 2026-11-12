@@ -17,6 +17,7 @@ import {
   CheckCircle2,
   AlertCircle,
   FileSpreadsheet,
+  FileText,
   Sparkles,
   Zap,
   Check,
@@ -35,8 +36,8 @@ import { GameService } from '../../services/gameService';
 import { sound } from '../../services/soundService';
 import { useAuth } from '../../context/AuthContext';
 import { CsvImportModal } from './CsvImportModal';
+import { TextTemplateModal } from './TextTemplateModal';
 import { QuestionPreviewModal } from './QuestionPreviewModal';
-import { generateFallbackQuizQuestions } from '../../utils/fallbackQuizGenerator';
 
 interface GameEditorProps {
   initialGame?: Game | null;
@@ -110,17 +111,18 @@ export const GameEditor: React.FC<GameEditorProps> = ({
 
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [showTextTemplateModal, setShowTextTemplateModal] = useState(false);
   const [showPreviewModal, setShowPreviewModal] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved');
   const [validationError, setValidationError] = useState<string | null>(null);
 
   // AI Generator specific states
   const [showAiGenerateModal, setShowAiGenerateModal] = useState(false);
-  const [aiTopic, setAiTopic] = useState(topic || '');
-  const [aiGrade, setAiGrade] = useState(grade || 'Year 2');
-  const [aiSubject, setAiSubject] = useState(subject || 'Science');
-  const [aiCount, setAiCount] = useState(10);
-  const [aiTypes, setAiTypes] = useState<QuestionType[]>(['mcq', 'true_false', 'short_answer']);
+  const [aiTargetLanguage, setAiTargetLanguage] = useState('Bahasa Melayu');
+  const [aiDifficulty, setAiDifficulty] = useState('Sederhana (Medium)');
+  const [aiNumQuestions, setAiNumQuestions] = useState(10);
+  const [aiQuestionType, setAiQuestionType] = useState('Campuran (MIXED)');
+  const [aiUserInstructions, setAiUserInstructions] = useState(topic || '');
   const [aiMergeMode, setAiMergeMode] = useState<'append' | 'replace'>('append');
   const [isGenerating, setIsGenerating] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
@@ -132,12 +134,12 @@ export const GameEditor: React.FC<GameEditorProps> = ({
   useEffect(() => {
     let interval: any;
     const messages = [
-      "Generating unique questions (up to 100)...",
-      "Formulating diverse educational challenges...",
-      "Ensuring each question is distinct with zero repeats...",
-      "Drafting varied incorrect option distractors...",
-      "Verifying answer keys across all topics...",
-      "Applying student-friendly explanations..."
+      "Menghubungi Gemini AI API...",
+      "Menganalisis tajuk dan prompt arahan...",
+      "Menjana soalan khusus berformat kurikulum...",
+      "Menghasilkan pilihan jawapan dan pengganggu tepat...",
+      "Menyemak ketepatan jawapan dan penjelasan ilmiah...",
+      "Menyusun soalan unik tanpa duplikasi..."
     ];
     if (isGenerating) {
       interval = setInterval(() => {
@@ -391,49 +393,70 @@ export const GameEditor: React.FC<GameEditorProps> = ({
     return true;
   };
 
-  // Helper to format, apply, and integrate generated questions
-  const applyGeneratedQuestions = (rawQuestions: any[], isFallback: boolean = false, fallbackReason: string = '') => {
+  // Helper to format, apply, and integrate generated questions from Gemini AI
+  const applyGeneratedQuestions = (rawQuestions: any[]) => {
     if (!rawQuestions || rawQuestions.length === 0) {
-      throw new Error('No questions available to format.');
+      throw new Error('Tiada soalan diterima daripada Gemini AI.');
     }
 
     const baseGameId = initialGame?.id || 'new_game';
     const formattedQuestions: Question[] = rawQuestions.map((q: any, idx: number) => {
       const qId = `q_ai_${Date.now()}_${idx}`;
       const points = q.points || 10;
-      const timer = q.timer || 30;
+      const timer = q.timer || 25;
       const explanation = q.explanation || '';
       
       let type: QuestionType = 'mcq';
-      if (q.type === 'true_false') type = 'true_false';
-      else if (q.type === 'short_answer') type = 'short_answer';
+      if (q.type === 'true_false' || (q.type && q.type.toLowerCase().includes('true'))) type = 'true_false';
+      else if (q.type === 'short_answer' || (q.type && q.type.toLowerCase().includes('short'))) type = 'short_answer';
 
       let options: McqOption[] | undefined;
       let correctOptionId: string | undefined;
       let correctAnswerText: string | undefined;
 
       if (type === 'mcq') {
-        options = (q.options || []).slice(0, 4).map((opt: any, oIdx: number) => ({
-          id: opt.id || `opt_${oIdx + 1}`,
-          text: opt.text || `Option ${oIdx + 1}`,
-        }));
-        if (options && options.length > 0) {
-          correctOptionId = q.correctOptionId || options[0].id;
+        const rawOptions = Array.isArray(q.options) && q.options.length > 0 ? q.options : [];
+        const labels = ['A', 'B', 'C', 'D'];
+        
+        options = labels.map((label, oIdx) => {
+          const found = rawOptions.find((opt: any) => 
+            String(opt.id || '').trim().toUpperCase() === label || 
+            String(opt.id || '').trim().toLowerCase() === `opt_${oIdx + 1}`
+          ) || rawOptions[oIdx];
+          
+          let text = found?.text || `Pilihan ${label}`;
+          text = text.replace(/^[A-D][.|\)]\s*/i, '').trim();
+          return {
+            id: `opt_${oIdx + 1}`,
+            text: text || `Pilihan ${label}`
+          };
+        });
+
+        // Determine correctOptionId
+        const correctAnsStr = String(q.correctAnswer || q.correctOptionId || 'A').trim().toUpperCase();
+        let matchIdx = -1;
+        if (['A', 'B', 'C', 'D'].includes(correctAnsStr)) {
+          matchIdx = labels.indexOf(correctAnsStr);
         } else {
-          options = [
-            { id: 'opt_1', text: 'Option A' },
-            { id: 'opt_2', text: 'Option B' }
-          ];
-          correctOptionId = 'opt_1';
+          matchIdx = rawOptions.findIndex((opt: any) => 
+            String(opt.id || '').trim().toUpperCase() === correctAnsStr ||
+            String(opt.text || '').trim().toUpperCase().includes(correctAnsStr)
+          );
         }
+        if (matchIdx < 0 || matchIdx > 3) matchIdx = 0;
+        correctOptionId = `opt_${matchIdx + 1}`;
       } else if (type === 'true_false') {
+        const isBM = (aiTargetLanguage || '').toLowerCase().includes('melayu');
         options = [
-          { id: 'opt_t', text: 'TRUE' },
-          { id: 'opt_f', text: 'FALSE' },
+          { id: 'opt_t', text: isBM ? 'BENAR' : 'TRUE' },
+          { id: 'opt_f', text: isBM ? 'PALSU' : 'FALSE' }
         ];
-        correctOptionId = q.correctOptionId === 'opt_f' ? 'opt_f' : 'opt_t';
+        const ansUpper = String(q.correctAnswer || q.correctOptionId || 'TRUE').toUpperCase();
+        correctOptionId = (ansUpper.includes('TRUE') || ansUpper.includes('BENAR') || ansUpper === 'OPT_T' || ansUpper === 'A') 
+          ? 'opt_t' 
+          : 'opt_f';
       } else if (type === 'short_answer') {
-        correctAnswerText = q.correctAnswerText || q.question || '';
+        correctAnswerText = q.correctAnswer || q.correctAnswerText || (Array.isArray(q.acceptedAnswers) && q.acceptedAnswers[0]) || '';
       }
 
       return {
@@ -452,7 +475,7 @@ export const GameEditor: React.FC<GameEditorProps> = ({
     });
 
     if (formattedQuestions.length === 0) {
-      throw new Error('AI did not generate any valid questions.');
+      throw new Error('Gemini AI tidak menghasilkan soalan yang sah.');
     }
 
     if (aiMergeMode === 'replace') {
@@ -466,10 +489,10 @@ export const GameEditor: React.FC<GameEditorProps> = ({
       if (updatedQuestions.length + formattedQuestions.length > 100) {
         const allowedCount = 100 - updatedQuestions.length;
         if (allowedCount <= 0) {
-          throw new Error('Your quiz already has 100 questions. Delete some questions first or choose Replace Strategy.');
+          throw new Error('Kuiz anda telah mencapai had 100 soalan. Padam sebahagian soalan atau pilih strategi Ganti Semua.');
         }
         formattedQuestions.splice(allowedCount);
-        alert(`Only ${allowedCount} questions were appended to keep the quiz within the 100-question limit.`);
+        alert(`Hanya ${allowedCount} soalan ditambah untuk memastikan kuiz tidak melebihi had 100 soalan.`);
       }
       formattedQuestions.forEach((q) => {
         q.order = updatedQuestions.length + 1;
@@ -479,67 +502,25 @@ export const GameEditor: React.FC<GameEditorProps> = ({
       setEditingQuestionId(formattedQuestions[0].id);
     }
 
-    // Auto-populate metadata if currently blank
+    // Auto-populate title if empty or default
+    const topicSummary = aiUserInstructions.split('\n')[0] || 'Tersuai';
     if (!title || title.toLowerCase().includes('untitled') || title.toLowerCase() === 'new game') {
-      setTitle(`AI Quiz: ${aiTopic}`);
+      setTitle(`Kuiz AI: ${topicSummary.slice(0, 30)}`);
     }
     if (!topic) {
-      setTopic(aiTopic);
-    }
-    if (!grade) {
-      setGrade(aiGrade);
-    }
-    if (!subject) {
-      setSubject(aiSubject);
+      setTopic(topicSummary.slice(0, 40));
     }
 
     setSaveStatus('unsaved');
     sound.playVictory();
     setShowAiGenerateModal(false);
-
-    if (isFallback) {
-      setAiBannerNotice(
-        `⚡ Mod Kesinambungan (Fallback): ${formattedQuestions.length} soalan telah dijana untuk topik "${aiTopic}". ${fallbackReason ? `(${fallbackReason})` : ''} Anda boleh menyemak dan mengubah suai soalan pada bila-bila masa.`
-      );
-    } else {
-      setAiBannerNotice(null);
-    }
+    setAiBannerNotice(`✨ Berjaya menjana ${formattedQuestions.length} soalan terus melalui Gemini AI.`);
   };
 
-  // Instant Fallback Generator (Bypass network entirely)
-  const handleGenerateFallbackOnly = () => {
-    if (!aiTopic.trim()) {
-      setAiError('Please enter a topic for the quiz.');
-      return;
-    }
-    if (aiTypes.length === 0) {
-      setAiError('Please select at least one question type.');
-      return;
-    }
-    sound.playClick();
-    setAiError(null);
-    try {
-      const fallbackList = generateFallbackQuizQuestions(
-        aiTopic.trim(),
-        aiCount,
-        aiSubject,
-        aiGrade,
-        aiTypes
-      );
-      applyGeneratedQuestions(fallbackList, true, 'Dijana pantas melalui sistem modul kurikulum setempat');
-    } catch (err: any) {
-      setAiError(err.message || 'Gagal menjana soalan fallback.');
-    }
-  };
-
-  // AI Quiz Generation via Gemini with automatic fallback on timeout (HTTP 504) or network failure
+  // AI Quiz Generation via Gemini API directly using custom structured prompt
   const handleGenerateAiQuiz = async () => {
-    if (!aiTopic.trim()) {
-      setAiError('Please enter a topic for the quiz.');
-      return;
-    }
-    if (aiTypes.length === 0) {
-      setAiError('Please select at least one question type.');
+    if (!aiUserInstructions.trim()) {
+      setAiError('Sila masukkan Tajuk / Arahan Pengguna.');
       return;
     }
 
@@ -547,99 +528,58 @@ export const GameEditor: React.FC<GameEditorProps> = ({
     setAiError(null);
     sound.playClick();
 
-    let rawQuestions: any[] = [];
-    let isFallback = false;
-    let fallbackReason = '';
-
     try {
-      let response: Response | null = null;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60-second safeguard
+
+      const response = await fetch('/api/gemini/generate-quiz', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          targetLanguage: aiTargetLanguage,
+          difficulty: aiDifficulty,
+          numQuestions: aiNumQuestions,
+          questionType: aiQuestionType,
+          userInstructions: aiUserInstructions.trim(),
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      const responseText = await response.text();
+      let data: any = {};
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 12000); // 12-second client timeout safeguard
-
-        response = await fetch('/api/gemini/generate-quiz', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            topic: aiTopic.trim(),
-            grade: aiGrade,
-            subject: aiSubject,
-            count: aiCount,
-            types: aiTypes,
-          }),
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
-      } catch (fetchErr: any) {
-        console.warn('Network or timeout during AI request:', fetchErr);
-        isFallback = true;
-        fallbackReason = 'Masa tamat sambungan pelayan';
+        data = JSON.parse(responseText);
+      } catch (parseErr) {
+        console.error('Non-JSON response received from /api/gemini/generate-quiz:', responseText);
+        throw new Error(`Ralat Pelayan (HTTP ${response.status}): Respons bukan JSON diterima daripada pelayan. Sila cuba lagi.`);
       }
 
-      if (response && response.ok) {
-        const data = await response.json();
-        if (data.questions && Array.isArray(data.questions) && data.questions.length > 0) {
-          rawQuestions = data.questions;
-          if (data.fallbackUsed) {
-            isFallback = true;
-            fallbackReason = data.errorNotice || 'Pelayan Vercel mengaktifkan mod fallback';
-          }
-        } else {
-          isFallback = true;
-          fallbackReason = 'Respons kosong dari AI';
-        }
-      } else {
-        // HTTP 504 Gateway Timeout or server error -> Activate fallback seamlessly
-        isFallback = true;
-        const status = response ? response.status : 504;
-        fallbackReason = status === 504
-          ? 'Pelayan Vercel mengalami masa tamat (HTTP 504)'
-          : `Ralat pelayan (HTTP ${status})`;
+      if (!response.ok) {
+        throw new Error(data?.error || `Ralat pelayan (HTTP ${response.status}) semasa menjana soalan melalui Gemini AI.`);
       }
 
-      // If network timed out or failed, generate curriculum questions via fallback
-      if (isFallback || rawQuestions.length === 0) {
-        console.info(`[Quiz AI] Activating fallback generator for topic "${aiTopic.trim()}" (${fallbackReason})`);
-        rawQuestions = generateFallbackQuizQuestions(
-          aiTopic.trim(),
-          aiCount,
-          aiSubject,
-          aiGrade,
-          aiTypes
-        );
+      if (!data.questions || !Array.isArray(data.questions) || data.questions.length === 0) {
+        throw new Error('Gemini AI tidak memulangkan sebarang soalan bagi tajuk/prompt tersebut. Sila semak tajuk atau prompt anda.');
       }
 
-      applyGeneratedQuestions(rawQuestions, isFallback, fallbackReason);
+      applyGeneratedQuestions(data.questions);
     } catch (err: any) {
-      console.error('AI quiz generation error, attempting emergency fallback:', err);
-      // Emergency fallback even on unexpected exceptions
-      try {
-        const emergencyList = generateFallbackQuizQuestions(
-          aiTopic.trim(),
-          aiCount,
-          aiSubject,
-          aiGrade,
-          aiTypes
-        );
-        applyGeneratedQuestions(emergencyList, true, 'Emergency fallback activated');
-      } catch (finalErr: any) {
-        setAiError(finalErr.message || 'An error occurred during generation.');
-        sound.playIncorrect();
+      console.error('Gemini AI generation error:', err);
+      let message = err.message || 'Gagal menjana soalan melalui Gemini AI.';
+      if (err.name === 'AbortError') {
+        message = 'Masa tamat: Permintaan menjana soalan mengambil masa terlalu lama. Sila kurangkan jumlah soalan atau cuba lagi.';
       }
+      setAiError(message);
+      sound.playIncorrect();
     } finally {
       setIsGenerating(false);
     }
   };
 
-  const toggleAiType = (type: QuestionType) => {
-    if (aiTypes.includes(type)) {
-      setAiTypes(aiTypes.filter((t) => t !== type));
-    } else {
-      setAiTypes([...aiTypes, type]);
-    }
-  };
 
   // Save game
   const handleSaveGame = async () => {
@@ -753,12 +693,15 @@ export const GameEditor: React.FC<GameEditorProps> = ({
           </button>
 
           <button
-            onClick={() => setShowImportModal(true)}
+            onClick={() => {
+              sound.playClick();
+              setShowTextTemplateModal(true);
+            }}
             className="px-2.5 py-1.5 rounded-lg bg-emerald-50 border border-emerald-300 hover:bg-emerald-100 text-emerald-800 font-bold text-xs flex items-center gap-1 transition-colors cursor-pointer"
-            title="Import questions from Excel template (.xlsx) or CSV"
+            title="Salin Text Template Prompt untuk generate soalan di mana-mana AI (ChatGPT, Claude, Gemini, dll.)"
           >
-            <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
-            <span className="hidden sm:inline">Excel</span>
+            <FileText className="w-3.5 h-3.5 text-emerald-600" />
+            <span className="hidden sm:inline">Text Template</span>
           </button>
 
           <button
@@ -1454,7 +1397,7 @@ export const GameEditor: React.FC<GameEditorProps> = ({
                 <Sparkles className="w-5.5 h-5.5 text-amber-300 animate-pulse" />
                 <div>
                   <h3 className="text-lg font-extrabold font-fun">AI Questions & Answers Generator</h3>
-                  <p className="text-xs text-indigo-100 font-medium">Powered by Gemini AI • Create full custom quizzes in seconds</p>
+                  <p className="text-xs text-indigo-100 font-medium">Dikuasakan oleh Gemini API • 100% Tulen Dari Tajuk & Prompt (Tiada Template Sandaran)</p>
                 </div>
               </div>
               {!isGenerating && (
@@ -1463,7 +1406,7 @@ export const GameEditor: React.FC<GameEditorProps> = ({
                     sound.playClick();
                     setShowAiGenerateModal(false);
                   }}
-                  className="p-1.5 hover:bg-white/10 rounded-full transition-colors text-white"
+                  className="p-1.5 hover:bg-white/10 rounded-full transition-colors text-white cursor-pointer"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -1479,16 +1422,16 @@ export const GameEditor: React.FC<GameEditorProps> = ({
                 </div>
                 <div className="space-y-2 max-w-sm">
                   <h4 className="text-base font-extrabold text-slate-900 font-fun animate-pulse">
-                    Generating Educational Quiz...
+                    Menjana Soalan Melalui Gemini AI...
                   </h4>
                   <p className="text-xs text-slate-500 font-semibold h-4 transition-all duration-300">
                     {[
-                      "Formulating educational challenges...",
-                      "Consulting the virtual textbook...",
-                      "Drafting incorrect option distractors...",
-                      "Verifying answer key consistency...",
-                      "Creating classroom magic moments...",
-                      "Applying student-friendly explanations..."
+                      "Menghubungi Gemini AI API...",
+                      "Menganalisis tajuk dan prompt arahan...",
+                      "Menjana soalan khusus berformat kurikulum...",
+                      "Menghasilkan pilihan jawapan dan pengganggu tepat...",
+                      "Menyemak ketepatan jawapan dan penjelasan ilmiah...",
+                      "Menyusun soalan unik tanpa duplikasi..."
                     ][loadingMsgIdx]}
                   </p>
                 </div>
@@ -1504,112 +1447,107 @@ export const GameEditor: React.FC<GameEditorProps> = ({
                     </div>
                     <button
                       type="button"
-                      onClick={handleGenerateFallbackOnly}
-                      className="mt-0.5 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-xs cursor-pointer self-start transition-all"
+                      onClick={handleGenerateAiQuiz}
+                      className="mt-0.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-xs cursor-pointer self-start transition-all"
                     >
-                      <Zap className="w-3.5 h-3.5" />
-                      <span>⚡ Jana Dengan Mod Fallback Segera (Tanpa Had Masa)</span>
+                      <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                      <span>Cuba Semula dengan Gemini AI</span>
                     </button>
                   </div>
                 )}
 
                 <div className="space-y-4">
-                  {/* Topic */}
+                  {/* Teacher / User Instructions & Topic */}
                   <div>
-                    <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-700 mb-1.5">
-                      Quiz Topic / Concept <span className="text-rose-500">*</span>
+                    <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-700 mb-1.5 flex items-center justify-between">
+                      <span>Tajuk & Arahan Guru / Pengguna <span className="text-rose-500">*</span></span>
+                      <span className="text-[10px] text-purple-600 font-bold bg-purple-50 px-2 py-0.5 rounded-md flex items-center gap-1">
+                        <Sparkles className="w-3 h-3" /> Gemini AI
+                      </span>
                     </label>
-                    <input
-                      type="text"
-                      value={aiTopic}
-                      onChange={(e) => setAiTopic(e.target.value)}
-                      placeholder="e.g. Photosynthesis, Solar System, Ancient Egypt, Decimals"
-                      className="w-full p-3 text-sm font-semibold rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 bg-slate-50"
+                    <textarea
+                      rows={3}
+                      value={aiUserInstructions}
+                      onChange={(e) => setAiUserInstructions(e.target.value)}
+                      placeholder="cth: Fotosintesis & Klorofil Sains Tahun 4. Sila sertakan soalan aras tinggi KBAT dan kaitan kehidupan harian..."
+                      className="w-full p-3 text-xs font-semibold rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 bg-slate-50 resize-y"
                     />
                   </div>
 
-                  {/* Two Column Subject & Grade */}
+                  {/* Two Column: Target Language & Difficulty */}
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-700 mb-1.5">
-                        Subject
+                        Target Language (Bahasa Sasaran)
                       </label>
-                      <input
-                        type="text"
-                        value={aiSubject}
-                        onChange={(e) => setAiSubject(e.target.value)}
-                        placeholder="Science, Math, Geography..."
-                        className="w-full p-2.5 text-xs font-semibold rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 bg-slate-50"
-                      />
+                      <select
+                        value={aiTargetLanguage}
+                        onChange={(e) => setAiTargetLanguage(e.target.value)}
+                        className="w-full p-2.5 text-xs font-semibold rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 bg-slate-50 cursor-pointer"
+                      >
+                        <option value="Bahasa Melayu">Bahasa Melayu</option>
+                        <option value="English">English</option>
+                        <option value="Bahasa Cina">Bahasa Cina (Mandarin)</option>
+                        <option value="Bahasa Tamil">Bahasa Tamil</option>
+                      </select>
                     </div>
                     <div>
                       <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-700 mb-1.5">
-                        Grade Level
+                        Difficulty Level (Tahap Kesukaran)
                       </label>
-                      <input
-                        type="text"
-                        value={aiGrade}
-                        onChange={(e) => setAiGrade(e.target.value)}
-                        placeholder="Year 2, Grade 5..."
-                        className="w-full p-2.5 text-xs font-semibold rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 bg-slate-50"
-                      />
+                      <select
+                        value={aiDifficulty}
+                        onChange={(e) => setAiDifficulty(e.target.value)}
+                        className="w-full p-2.5 text-xs font-semibold rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 bg-slate-50 cursor-pointer"
+                      >
+                        <option value="Mudah (Easy)">Mudah (Easy)</option>
+                        <option value="Sederhana (Medium)">Sederhana (Medium)</option>
+                        <option value="Sukar (Hard)">Sukar (Hard)</option>
+                        <option value="Sangat Sukar (Expert)">Sangat Sukar (Expert)</option>
+                      </select>
                     </div>
                   </div>
 
-                  {/* Question Types Multi-Select */}
+                  {/* Question Format Requested */}
                   <div>
                     <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-700 mb-2">
-                      Allowed Question Types <span className="text-rose-500">*</span>
+                      Format Soalan (Question Format Requested)
                     </label>
-                    <div className="flex flex-wrap gap-2.5">
-                      <button
-                        type="button"
-                        onClick={() => toggleAiType('mcq')}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer ${
-                          aiTypes.includes('mcq')
-                            ? 'bg-indigo-50 border-indigo-300 text-indigo-700 shadow-2xs'
-                            : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                        }`}
-                      >
-                        <Check className={`w-3.5 h-3.5 transition-transform ${aiTypes.includes('mcq') ? 'scale-100' : 'scale-0'}`} />
-                        <span>Multiple Choice</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => toggleAiType('true_false')}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer ${
-                          aiTypes.includes('true_false')
-                            ? 'bg-indigo-50 border-indigo-300 text-indigo-700 shadow-2xs'
-                            : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                        }`}
-                      >
-                        <Check className={`w-3.5 h-3.5 transition-transform ${aiTypes.includes('true_false') ? 'scale-100' : 'scale-0'}`} />
-                        <span>True / False</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => toggleAiType('short_answer')}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer ${
-                          aiTypes.includes('short_answer')
-                            ? 'bg-indigo-50 border-indigo-300 text-indigo-700 shadow-2xs'
-                            : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                        }`}
-                      >
-                        <Check className={`w-3.5 h-3.5 transition-transform ${aiTypes.includes('short_answer') ? 'scale-100' : 'scale-0'}`} />
-                        <span>Short Answer</span>
-                      </button>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {[
+                        { id: 'Campuran (MIXED)', label: 'Campuran (MIXED)' },
+                        { id: 'MCQ (Aneka Pilihan)', label: 'MCQ' },
+                        { id: 'TRUE_FALSE (Benar/Palsu)', label: 'Benar / Palsu' },
+                        { id: 'SHORT_ANSWER (Jawapan Pendek)', label: 'Jawapan Pendek' },
+                      ].map((fmt) => (
+                        <button
+                          key={fmt.id}
+                          type="button"
+                          onClick={() => {
+                            sound.playClick();
+                            setAiQuestionType(fmt.id);
+                          }}
+                          className={`p-2 rounded-xl text-xs font-bold border transition-all text-center cursor-pointer ${
+                            aiQuestionType === fmt.id
+                              ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
+                              : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                          }`}
+                        >
+                          {fmt.label}
+                        </button>
+                      ))}
                     </div>
                   </div>
 
-                  {/* Question Count Selector (Supports up to 100 unique questions) */}
+                  {/* Question Count Selector (Supports up to 100 questions) */}
                   <div className="space-y-2">
                     <div className="flex items-center justify-between mb-1">
                       <div>
                         <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-700">
-                          Number of Questions (Up to 100 Unique)
+                          Bilangan Soalan (Number of Questions)
                         </label>
                         <p className="text-[10px] text-slate-500 font-medium">
-                          Every single question will be completely unique with zero duplicates
+                          Setiap soalan dijana unik secara terstruktur oleh Gemini AI
                         </p>
                       </div>
                       <div className="flex items-center gap-1.5">
@@ -1617,10 +1555,10 @@ export const GameEditor: React.FC<GameEditorProps> = ({
                           type="number"
                           min={1}
                           max={100}
-                          value={aiCount}
+                          value={aiNumQuestions}
                           onChange={(e) => {
                             const val = Math.min(100, Math.max(1, parseInt(e.target.value, 10) || 1));
-                            setAiCount(val);
+                            setAiNumQuestions(val);
                           }}
                           className="w-16 p-1 text-center font-mono font-black text-sm text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-indigo-500"
                         />
@@ -1633,24 +1571,24 @@ export const GameEditor: React.FC<GameEditorProps> = ({
                       min={1}
                       max={100}
                       step={1}
-                      value={aiCount}
-                      onChange={(e) => setAiCount(Number(e.target.value))}
+                      value={aiNumQuestions}
+                      onChange={(e) => setAiNumQuestions(Number(e.target.value))}
                       className="w-full accent-indigo-600 bg-slate-100 rounded-lg cursor-pointer h-2"
                     />
 
                     {/* Quick Preset Buttons */}
                     <div className="flex flex-wrap items-center gap-1.5 pt-1">
                       <span className="text-[10px] font-bold text-slate-400 mr-1">Pantas:</span>
-                      {[5, 10, 20, 30, 50, 75, 100].map((preset) => (
+                      {[5, 10, 15, 20, 30, 50, 100].map((preset) => (
                         <button
                           key={preset}
                           type="button"
                           onClick={() => {
                             sound.playClick();
-                            setAiCount(preset);
+                            setAiNumQuestions(preset);
                           }}
                           className={`px-2 py-0.5 rounded-md font-mono text-[11px] font-bold transition-all cursor-pointer ${
-                            aiCount === preset
+                            aiNumQuestions === preset
                               ? 'bg-indigo-600 text-white shadow-2xs scale-105'
                               : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200/80'
                           }`}
@@ -1664,7 +1602,7 @@ export const GameEditor: React.FC<GameEditorProps> = ({
                   {/* Append / Replace Selection */}
                   <div>
                     <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-700 mb-2">
-                      Integration Strategy
+                      Strategi Integrasi
                     </label>
                     <div className="grid grid-cols-2 gap-3">
                       <button
@@ -1679,8 +1617,8 @@ export const GameEditor: React.FC<GameEditorProps> = ({
                             : 'border-slate-200 hover:border-slate-300 text-slate-600'
                         }`}
                       >
-                        <p className="font-extrabold text-xs">Append to Quiz</p>
-                        <p className="text-[10px] opacity-75 font-semibold mt-0.5">Keep existing cards, add new ones</p>
+                        <p className="font-extrabold text-xs">Tambah ke Kuiz (Append)</p>
+                        <p className="text-[10px] opacity-75 font-semibold mt-0.5">Kekalkan soalan sedia ada, tambah soalan baru</p>
                       </button>
                       <button
                         type="button"
@@ -1694,8 +1632,8 @@ export const GameEditor: React.FC<GameEditorProps> = ({
                             : 'border-slate-200 hover:border-slate-300 text-slate-600'
                         }`}
                       >
-                        <p className="font-extrabold text-xs text-rose-800">Replace All</p>
-                        <p className="text-[10px] opacity-75 font-semibold mt-0.5 text-rose-600">Erase current cards, create fresh</p>
+                        <p className="font-extrabold text-xs text-rose-800">Ganti Semua (Replace All)</p>
+                        <p className="text-[10px] opacity-75 font-semibold mt-0.5 text-rose-600">Padam soalan lama, cipta set baru sepenuhnya</p>
                       </button>
                     </div>
                   </div>
@@ -1703,16 +1641,10 @@ export const GameEditor: React.FC<GameEditorProps> = ({
 
                 {/* Footer Controls */}
                 <div className="pt-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
-                  <button
-                    type="button"
-                    disabled={isGenerating}
-                    onClick={handleGenerateFallbackOnly}
-                    className="px-3 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-800 font-extrabold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
-                    title="Jana pantas secara terus tanpa risiko masa tamat pelayan"
-                  >
-                    <Zap className="w-3.5 h-3.5 text-amber-600" />
-                    <span>⚡ Mod Fallback Segera</span>
-                  </button>
+                  <div className="flex items-center gap-1.5 text-xs font-extrabold text-indigo-700 bg-indigo-50 px-3 py-1.5 rounded-xl border border-indigo-200/60">
+                    <Sparkles className="w-4 h-4 text-purple-600 animate-pulse" />
+                    <span>Gemini AI Engine • Bebas Template Sandaran</span>
+                  </div>
 
                   <div className="flex items-center gap-2.5">
                     <button
@@ -1724,7 +1656,7 @@ export const GameEditor: React.FC<GameEditorProps> = ({
                       }}
                       className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 font-extrabold text-xs cursor-pointer"
                     >
-                      Cancel
+                      Batal
                     </button>
                     <button
                       type="button"
@@ -1733,7 +1665,7 @@ export const GameEditor: React.FC<GameEditorProps> = ({
                       className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 text-white hover:from-purple-700 hover:to-indigo-700 shadow-md font-extrabold text-xs flex items-center gap-1.5 transition-all cursor-pointer"
                     >
                       <Sparkles className="w-4 h-4 text-amber-300 animate-pulse" />
-                      <span>GENERATE QUESTIONS</span>
+                      <span>JANA SOALAN DENGAN GEMINI AI</span>
                     </button>
                   </div>
                 </div>
@@ -1743,7 +1675,20 @@ export const GameEditor: React.FC<GameEditorProps> = ({
         </div>
       )}
 
-      {/* CSV Import Modal */}
+      {/* Text Template Modal for copying prompt to any AI & importing back */}
+      <TextTemplateModal
+        isOpen={showTextTemplateModal}
+        gameId={initialGame?.id || 'new_game'}
+        existingQuestions={questions}
+        onImportSuccess={(newQs) => {
+          setQuestions(newQs);
+          setSaveStatus('unsaved');
+          setAiBannerNotice(`✨ Berjaya mengimport ${newQs.length} soalan daripada Text Template AI.`);
+        }}
+        onClose={() => setShowTextTemplateModal(false)}
+      />
+
+      {/* CSV / Excel Fallback Import Modal */}
       <CsvImportModal
         isOpen={showImportModal}
         gameId={initialGame?.id || 'new_game'}

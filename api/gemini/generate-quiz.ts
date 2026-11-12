@@ -1,5 +1,4 @@
 import { GoogleGenAI, Type } from '@google/genai';
-import { generateFallbackQuizQuestions } from '../../src/utils/fallbackQuizGenerator';
 
 export const maxDuration = 60;
 export const config = {
@@ -24,27 +23,37 @@ export default async function handler(req: any, res: any) {
     return res.status(405).json({ error: 'Method Not Allowed. Use POST.' });
   }
 
-  const { topic, grade, subject, count = 5, types = ['mcq', 'true_false', 'short_answer'] } = req.body || {};
+  const {
+    targetLanguage,
+    difficulty,
+    numQuestions,
+    count,
+    questionType,
+    types,
+    userInstructions,
+    topic,
+    instructions,
+    customPrompt
+  } = req.body || {};
 
-  if (!topic || typeof topic !== 'string' || !topic.trim()) {
-    return res.status(400).json({ error: 'Topic is required.' });
+  const targetLang = (targetLanguage || 'Bahasa Melayu').trim();
+  const diffLevel = (difficulty || 'Sederhana (Medium)').trim();
+  const qFormat = (questionType || (Array.isArray(types) ? types.join(', ') : 'MIXED')).trim();
+  const instructionsText = (userInstructions || topic || instructions || customPrompt || 'General Knowledge Quiz').trim();
+
+  if (!instructionsText) {
+    return res.status(400).json({ error: 'Teacher / User Instructions & Topic is required.' });
   }
 
-  const targetCount = Math.min(Math.max(parseInt(count, 10) || 5, 1), 100);
+  const requestedCount = parseInt(numQuestions || count, 10) || 10;
+  const targetCount = Math.min(Math.max(requestedCount, 1), 100);
 
   const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
   if (!apiKey) {
-    console.warn('[Vercel API] GEMINI_API_KEY is not configured, activating fallback generator.');
-    const fallbackQuestions = generateFallbackQuizQuestions(topic, targetCount, subject, grade, types);
-    return res.status(200).json({
-      questions: fallbackQuestions,
-      fallbackUsed: true,
-      errorNotice: 'GEMINI_API_KEY is not configured in Vercel. Generated questions using curriculum fallback system.',
+    return res.status(500).json({
+      error: 'GEMINI_API_KEY is not configured in environment variables. Please configure GEMINI_API_KEY to generate questions using Gemini AI.',
     });
   }
-
-  const functionStartTime = Date.now();
-  const TIME_BUDGET_MS = 8500; // Return gracefully before Vercel 10s timeout
 
   try {
     const ai = new GoogleGenAI({
@@ -56,18 +65,17 @@ export default async function handler(req: any, res: any) {
       },
     });
 
-    const systemInstruction = `You are an expert educator, curriculum designer, and school teacher. 
-Your task is to generate high-quality, engaging, grade-appropriate classroom quiz questions and answers.
-CRITICAL MANDATE: Every single question in the returned set MUST be completely UNIQUE, distinct, and explore a different concept, fact, problem variation, or perspective.
-Under NO circumstances repeat questions, create trivial rephrasings, or recycle identical answer choices.
-Each question should be educational, clear, and include a helpful, encouraging explanation of the correct answer.
+    const systemInstruction = `You are an expert educational quiz designer and professional curriculum creator.
+Generate a structured, high-quality educational quiz based on the user's input.
 
-Supported question types are:
-1. 'mcq': Multiple Choice. Generate 3 to 4 options (standard is 4, e.g. A, B, C, D) with unique IDs ('opt_1', 'opt_2', etc.) and exactly one correct Option ID.
-2. 'true_false': True or False statement. Options must be exactly two elements with ID 'opt_t' (text: 'TRUE') and 'opt_f' (text: 'FALSE').
-3. 'short_answer': Open-ended question where the student types a short answer. Provide the exact correct answer text in 'correctAnswerText' (e.g. 'Paris' or 'mammal').
-
-The tone of questions and explanations should be highly engaging, enthusiastic, and suitable for the selected grade level. Ensure all option text, correct options, and answers are fully filled out and correct. Do not use markdown inside any of the returned strings.`;
+CRITICAL LANGUAGE MANDATE:
+1. All question text, MCQ option texts, explanations, and accepted answers MUST be written 100% strictly in ${targetLang}.
+2. If Target Language is "Bahasa Melayu", DO NOT output English text for questions, options, or explanations under any circumstances.
+3. For MCQ (Aneka Pilihan): Provide exactly 4 distinct, unambiguous options with labels A, B, C, D. Specify the correct letter (e.g. "B") in correctAnswer.
+4. For TRUE_FALSE (Benar/Palsu): The correctAnswer must be strictly either "TRUE" or "FALSE".
+5. For SHORT_ANSWER (Jawapan Pendek): The correctAnswer must be a concise answer (1-3 words in ${targetLang}). Provide common alternative accepted spellings/synonyms in ${targetLang} in the acceptedAnswers array.
+6. Provide a clear, educational, age-appropriate explanation in ${targetLang} for why the answer is correct.
+7. Ensure all UTF-8 characters and Malay/accented words are formatted cleanly.`;
 
     const batchSize = Math.min(20, targetCount);
     const totalBatches = Math.ceil(targetCount / batchSize);
@@ -117,29 +125,14 @@ The tone of questions and explanations should be highly engaging, enthusiastic, 
       return false;
     }
 
-    const subtopicAngles = [
-      'Core definitions, fundamental principles, and essential terminology',
-      'Real-world applications, practical case studies, and everyday examples',
-      'Advanced problem-solving, comparisons, cause-and-effect relationships',
-      'Historical timeline, fascinating trivia, and groundbreaking discoveries',
-      'Critical thinking, common misconceptions, and synthesis problems',
-      'Experimental methods, data interpretation, and quantitative calculations',
-      'Global perspectives, comparative analyses, and interdisciplinary connections'
-    ];
-
     let batchIndex = 0;
-    const maxAttempts = totalBatches + 1;
+    const maxAttempts = totalBatches + 2;
+    // Use the lowest tier, fastest lightweight model first as requested, with robust fallback
+    const candidateModels = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'];
 
     while (collectedQuestions.length < targetCount && batchIndex < maxAttempts) {
-      // Check time budget to prevent Vercel 504 Gateway Timeout
-      if (Date.now() - functionStartTime > TIME_BUDGET_MS) {
-        console.warn(`[Vercel API] Approaching time limit (${Date.now() - functionStartTime}ms). Exiting loop early to prevent 504.`);
-        break;
-      }
-
       const remainingNeeded = targetCount - collectedQuestions.length;
       const currentBatchCount = Math.min(batchSize, remainingNeeded);
-      const angle = subtopicAngles[batchIndex % subtopicAngles.length];
 
       const existingSummary = collectedQuestions
         .slice(-40)
@@ -147,33 +140,22 @@ The tone of questions and explanations should be highly engaging, enthusiastic, 
         .join('\n');
 
       const uniquenessConstraint = collectedQuestions.length > 0
-        ? `\n\nCRITICAL MANDATE - ZERO DUPLICATES (Must generate ${currentBatchCount} COMPLETELY NEW questions):
-Under NO circumstances repeat, rephrase, or recycle any of the following questions already generated:
-${existingSummary}
+        ? `\n\nCRITICAL MANDATE - ZERO DUPLICATES (Generate ${currentBatchCount} COMPLETELY NEW questions):
+Do not repeat, rephrase, or recycle any of the following questions already generated:
+${existingSummary}`
+        : '';
 
-Focus specifically on this distinct angle: "${angle}".
-Every single question MUST present a completely novel question statement, different answer choices, and explore a fresh aspect of the topic!`
-        : `\nPrimary focus area for this set: "${angle}". Ensure all questions are unique, creative, and varied.`;
+      const userPrompt = `Target Language: ${targetLang}
+Difficulty Level: ${diffLevel}
+Number of Questions: ${currentBatchCount}
+Question Format Requested: ${qFormat}
+Teacher / User Instructions & Topic: "${instructionsText}"${uniquenessConstraint}`;
 
-      const userPrompt = `Generate exactly ${currentBatchCount} completely UNIQUE and DIFFERENT quiz questions about the topic: "${topic}".
-Grade level: ${grade || 'General'}
-Subject: ${subject || 'General'}
-Allowed question types to include: ${types.join(', ')}. Please balance the requested types across the questions.${uniquenessConstraint}`;
-
-      // Ultra-fast flash models first to prevent serverless timeout
-      const candidateModels = ['gemini-flash-latest', 'gemini-3.1-flash-lite', 'gemini-3.8-flash'];
       let batchResponse: any = null;
       let lastError: any = null;
 
       for (const modelName of candidateModels) {
-        // Double check time before making external API call
-        if (Date.now() - functionStartTime > TIME_BUDGET_MS) {
-          console.warn('[Vercel API] Budget reached before calling next model.');
-          break;
-        }
-
         try {
-          console.log(`[Vercel API] Generating batch pass ${batchIndex + 1} with model: ${modelName}`);
           batchResponse = await ai.models.generateContent({
             model: modelName,
             contents: userPrompt,
@@ -185,52 +167,57 @@ Allowed question types to include: ${types.join(', ')}. Please balance the reque
                 properties: {
                   questions: {
                     type: Type.ARRAY,
-                    description: "List of completely unique questions matching the criteria.",
+                    description: "List of structured educational quiz questions.",
                     items: {
                       type: Type.OBJECT,
                       properties: {
                         question: {
                           type: Type.STRING,
-                          description: "The clear, student-friendly question text or statement. MUST be completely unique and distinct."
+                          description: "The clear question text strictly in TARGET_LANGUAGE."
                         },
                         type: {
                           type: Type.STRING,
                           description: "Must be 'mcq', 'true_false', or 'short_answer'."
                         },
-                        points: {
-                          type: Type.INTEGER,
-                          description: "Suggested points (e.g., 10, 15, 20)."
-                        },
-                        timer: {
-                          type: Type.INTEGER,
-                          description: "Suggested time limit in seconds (e.g., 15, 30, 45)."
-                        },
                         options: {
                           type: Type.ARRAY,
-                          description: "Mandatory for 'mcq' and 'true_false'. For 'true_false' it must have exactly 2 options with ids 'opt_t' (TRUE) and 'opt_f' (FALSE). For 'mcq', it must have 3-4 options with unique ids like 'opt_1', 'opt_2', etc.",
+                          description: "For MCQ: exactly 4 distinct options with labels A, B, C, D and option text. For TRUE_FALSE: options for TRUE and FALSE.",
                           items: {
                             type: Type.OBJECT,
                             properties: {
-                              id: { type: Type.STRING },
-                              text: { type: Type.STRING }
+                              id: { type: Type.STRING, description: "Label like 'A', 'B', 'C', 'D' or 'TRUE', 'FALSE'." },
+                              text: { type: Type.STRING, description: "Option text in TARGET_LANGUAGE." }
                             },
                             required: ["id", "text"]
                           }
                         },
+                        correctAnswer: {
+                          type: Type.STRING,
+                          description: "For MCQ: correct letter 'A', 'B', 'C', or 'D'. For TRUE_FALSE: strictly 'TRUE' or 'FALSE'. For SHORT_ANSWER: concise answer text."
+                        },
                         correctOptionId: {
                           type: Type.STRING,
-                          description: "The id of the correct option (e.g. 'opt_1' or 'opt_t'). Mandatory for 'mcq' and 'true_false'."
+                          description: "Correct option label or ID."
                         },
-                        correctAnswerText: {
-                          type: Type.STRING,
-                          description: "The correct answer text. Mandatory for 'short_answer'. Leave empty for other types."
+                        acceptedAnswers: {
+                          type: Type.ARRAY,
+                          description: "For SHORT_ANSWER: common alternative accepted spellings/synonyms in TARGET_LANGUAGE.",
+                          items: { type: Type.STRING }
                         },
                         explanation: {
                           type: Type.STRING,
-                          description: "A short, engaging explanation of why the answer is correct."
+                          description: "Clear, educational explanation in TARGET_LANGUAGE."
+                        },
+                        points: {
+                          type: Type.INTEGER,
+                          description: "Suggested points (e.g., 10)."
+                        },
+                        timer: {
+                          type: Type.INTEGER,
+                          description: "Suggested time limit in seconds (e.g., 25)."
                         }
                       },
-                      required: ["question", "type", "points", "timer", "explanation"]
+                      required: ["question", "type", "correctAnswer", "explanation"]
                     }
                   }
                 },
@@ -241,7 +228,7 @@ Allowed question types to include: ${types.join(', ')}. Please balance the reque
 
           if (batchResponse) break;
         } catch (err: any) {
-          console.warn(`[Vercel API] Model ${modelName} failed:`, err?.message || err);
+          console.warn(`[Vercel API] Model ${modelName} failed on batch ${batchIndex + 1}:`, err?.message || err);
           lastError = err;
         }
       }
@@ -260,7 +247,7 @@ Allowed question types to include: ${types.join(', ')}. Please balance the reque
             }
           }
         } catch (parseErr) {
-          console.error(`Failed to parse batch ${batchIndex + 1} response:`, parseErr);
+          console.error(`[Vercel API] Failed to parse batch ${batchIndex + 1} response:`, parseErr);
         }
       } else if (lastError && collectedQuestions.length === 0) {
         throw lastError;
@@ -269,24 +256,15 @@ Allowed question types to include: ${types.join(', ')}. Please balance the reque
       batchIndex++;
     }
 
-    // If we need more questions to meet the requested target count, fill seamlessly using fallback
-    if (collectedQuestions.length < targetCount) {
-      const needed = targetCount - collectedQuestions.length;
-      console.log(`[Vercel API] Filling remaining ${needed} questions using fallback generator...`);
-      const fillQuestions = generateFallbackQuizQuestions(topic, needed, subject, grade, types);
-      for (const fq of fillQuestions) {
-        if (collectedQuestions.length >= targetCount) break;
-        if (!isDuplicateOrTooSimilar(fq.question, collectedQuestions)) {
-          collectedQuestions.push(fq);
-        }
-      }
+    if (collectedQuestions.length === 0) {
+      throw new Error('Gemini API did not return any valid questions for the specified topic/prompt. Please check your prompt and try again.');
     }
 
     const finalQuestions = collectedQuestions.slice(0, targetCount);
     return res.status(200).json({ questions: finalQuestions });
   } catch (error: any) {
-    console.error('Error generating quiz questions on Vercel:', error);
-    let errMsg = error?.message || 'Failed to generate questions. Please check your Gemini API key.';
+    console.error('Error generating quiz questions via Gemini API:', error);
+    let errMsg = error?.message || 'Failed to generate questions using Gemini API.';
     try {
       if (typeof errMsg === 'string' && (errMsg.startsWith('{') || errMsg.includes('{"error"'))) {
         const parsed = JSON.parse(errMsg);
@@ -294,13 +272,8 @@ Allowed question types to include: ${types.join(', ')}. Please balance the reque
       }
     } catch (_) {}
 
-    // Fallback: Return guaranteed curriculum questions so user's game creation never fails
-    console.warn('[Vercel API] Returning fallback questions due to error:', errMsg);
-    const fallbackList = generateFallbackQuizQuestions(topic, targetCount, subject, grade, types);
-    return res.status(200).json({
-      questions: fallbackList,
-      fallbackUsed: true,
-      errorNotice: errMsg,
+    return res.status(500).json({
+      error: errMsg,
     });
   }
 }

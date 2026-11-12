@@ -18,22 +18,38 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'healthy', time: new Date().toISOString() });
 });
 
-// Gemini AI Question and Answer Generator Endpoint (supports up to 100 100% unique questions)
+// Gemini AI Question and Answer Generator Endpoint (strictly authentic generation via Gemini API)
 app.post('/api/gemini/generate-quiz', async (req, res) => {
-  const { topic, grade, subject, count = 5, types = ['mcq', 'true_false', 'short_answer'] } = req.body;
+  const {
+    targetLanguage,
+    difficulty,
+    numQuestions,
+    count,
+    questionType,
+    types,
+    userInstructions,
+    topic,
+    instructions,
+    customPrompt
+  } = req.body || {};
 
-  if (!topic) {
-    return res.status(400).json({ error: 'Topic is required.' });
+  const targetLang = (targetLanguage || 'Bahasa Melayu').trim();
+  const diffLevel = (difficulty || 'Sederhana (Medium)').trim();
+  const qFormat = (questionType || (Array.isArray(types) ? types.join(', ') : 'MIXED')).trim();
+  const instructionsText = (userInstructions || topic || instructions || customPrompt || 'General Knowledge Quiz').trim();
+
+  if (!instructionsText) {
+    return res.status(400).json({ error: 'Teacher / User Instructions & Topic is required.' });
   }
 
-  // Support up to 100 questions as requested by user
-  const targetCount = Math.min(Math.max(parseInt(count, 10) || 5, 1), 100);
+  const requestedCount = parseInt(numQuestions || count, 10) || 10;
+  const targetCount = Math.min(Math.max(requestedCount, 1), 100);
 
   try {
     const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
     if (!apiKey) {
       return res.status(500).json({
-        error: 'GEMINI_API_KEY is not configured. In Vercel, please add GEMINI_API_KEY under Project Settings -> Environment Variables, then Redeploy your project.',
+        error: 'GEMINI_API_KEY is not configured. Please ensure GEMINI_API_KEY is set in your environment variables.',
       });
     }
 
@@ -46,22 +62,21 @@ app.post('/api/gemini/generate-quiz', async (req, res) => {
       }
     });
 
-    const systemInstruction = `You are an expert educator, curriculum designer, and school teacher. 
-Your task is to generate high-quality, engaging, grade-appropriate classroom quiz questions and answers.
-CRITICAL MANDATE: Every single question in the returned set MUST be completely UNIQUE, distinct, and explore a different concept, fact, problem variation, or perspective.
-Under NO circumstances repeat questions, create trivial rephrasings, or recycle identical answer choices.
-Each question should be educational, clear, and include a helpful, encouraging explanation of the correct answer.
+    const systemInstruction = `You are an expert educational quiz designer and professional curriculum creator.
+Generate a structured, high-quality educational quiz based on the user's input.
 
-Supported question types are:
-1. 'mcq': Multiple Choice. Generate 3 to 4 options (standard is 4, e.g. A, B, C, D) with unique IDs ('opt_1', 'opt_2', etc.) and exactly one correct Option ID.
-2. 'true_false': True or False statement. Options must be exactly two elements with ID 'opt_t' (text: 'TRUE') and 'opt_f' (text: 'FALSE').
-3. 'short_answer': Open-ended question where the student types a short answer. Provide the exact correct answer text in 'correctAnswerText' (e.g. 'Paris' or 'mammal').
-
-The tone of questions and explanations should be highly engaging, enthusiastic, and suitable for the selected grade level. Ensure all option text, correct options, and answers are fully filled out and correct. Do not use markdown inside any of the returned strings.`;
+CRITICAL LANGUAGE MANDATE:
+1. All question text, MCQ option texts, explanations, and accepted answers MUST be written 100% strictly in ${targetLang}.
+2. If Target Language is "Bahasa Melayu", DO NOT output English text for questions, options, or explanations under any circumstances.
+3. For MCQ (Aneka Pilihan): Provide exactly 4 distinct, unambiguous options with labels A, B, C, D. Specify the correct letter (e.g. "B") in correctAnswer.
+4. For TRUE_FALSE (Benar/Palsu): The correctAnswer must be strictly either "TRUE" or "FALSE".
+5. For SHORT_ANSWER (Jawapan Pendek): The correctAnswer must be a concise answer (1-3 words in ${targetLang}). Provide common alternative accepted spellings/synonyms in ${targetLang} in the acceptedAnswers array.
+6. Provide a clear, educational, age-appropriate explanation in ${targetLang} for why the answer is correct.
+7. Ensure all UTF-8 characters and Malay/accented words are formatted cleanly.`;
 
     // Batching strategy to reliably support up to 100 questions without output token limits or timeouts
-    // Generates in batches of up to 25 with strict uniqueness across all questions
-    const batchSize = Math.min(25, targetCount);
+    // Generates in batches of up to 20 with strict uniqueness across all questions
+    const batchSize = Math.min(20, targetCount);
     const totalBatches = Math.ceil(targetCount / batchSize);
     const collectedQuestions: any[] = [];
     const seenNormalized = new Set<string>();
@@ -103,7 +118,6 @@ The tone of questions and explanations should be highly engaging, enthusiastic, 
         }
         const union = new Set([...newKeywords, ...existKeywords]).size;
         const jaccard = union > 0 ? intersection / union : 0;
-        // If >65% identical significant keywords, consider it a duplicate/rephrase
         if (jaccard > 0.65) {
           return true;
         }
@@ -112,44 +126,46 @@ The tone of questions and explanations should be highly engaging, enthusiastic, 
     }
 
     const subtopicAngles = [
-      'Core definitions, fundamental principles, and essential terminology',
+      'Core definitions, fundamental mechanisms, and essential terminology',
       'Real-world applications, practical case studies, and everyday examples',
-      'Advanced problem-solving, comparisons, cause-and-effect relationships',
-      'Historical timeline, fascinating trivia, and groundbreaking discoveries',
-      'Critical thinking, common misconceptions, and synthesis problems',
-      'Experimental methods, data interpretation, and quantitative calculations',
-      'Global perspectives, comparative analyses, and interdisciplinary connections'
+      'Cause-and-effect relationships, scientific processes, and comparative analyses',
+      'Historical timeline, fascinating trivia, and landmark discoveries',
+      'Critical thinking, troubleshooting, and synthesis problems',
+      'Experimental observations, quantitative calculations, and data interpretation',
+      'System interactions, interconnected concepts, and advanced problem-solving'
     ];
 
     let batchIndex = 0;
-    const maxAttempts = totalBatches + 3; // allow up to 3 extra refill passes if duplicates are filtered
+    const maxAttempts = totalBatches + 2;
+    // Use the lowest tier, fastest lightweight model first as requested, with robust fallback
+    const candidateModels = ['gemini-3.1-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest'];
 
     while (collectedQuestions.length < targetCount && batchIndex < maxAttempts) {
       const remainingNeeded = targetCount - collectedQuestions.length;
       const currentBatchCount = Math.min(batchSize, remainingNeeded);
       const angle = subtopicAngles[batchIndex % subtopicAngles.length];
 
-      // Build sample of all existing questions so Gemini never repeats any of them
+      // Build sample of previous questions to prevent duplicates
       const existingSummary = collectedQuestions
-        .slice(-60) // pass up to 60 previous questions to stay well within token limits
+        .slice(-40)
         .map((q, idx) => `${idx + 1}. ${q.question}`)
         .join('\n');
 
       const uniquenessConstraint = collectedQuestions.length > 0
-        ? `\n\nCRITICAL MANDATE - ZERO DUPLICATES (Must generate ${currentBatchCount} COMPLETELY NEW questions):
-Under NO circumstances repeat, rephrase, or recycle any of the following questions already generated:
+        ? `\n\nCRITICAL MANDATE - ZERO DUPLICATES (Generate ${currentBatchCount} COMPLETELY NEW questions):
+Do not repeat, rephrase, or recycle any of the following questions already generated:
 ${existingSummary}
 
-Focus specifically on this distinct angle: "${angle}".
-Every single question MUST present a completely novel question statement, different answer choices, and explore a fresh aspect of the topic!`
-        : `\nPrimary focus area for this set: "${angle}". Ensure all questions are unique, creative, and varied.`;
+Focus on this specific dimension: "${angle}".
+Every single question MUST present a novel concept statement, genuine topic details, and distinct answer choices!`
+        : `\nPrimary focus dimension for this set: "${angle}".`;
 
-      const userPrompt = `Generate exactly ${currentBatchCount} completely UNIQUE and DIFFERENT quiz questions about the topic: "${topic}".
-Grade level: ${grade || 'General'}
-Subject: ${subject || 'General'}
-Allowed question types to include: ${types.join(', ')}. Please balance the requested types across the questions.${uniquenessConstraint}`;
+      const userPrompt = `Target Language: ${targetLang}
+Difficulty Level: ${diffLevel}
+Number of Questions: ${currentBatchCount}
+Question Format Requested: ${qFormat}
+Teacher / User Instructions & Topic: "${instructionsText}"${uniquenessConstraint}`;
 
-      const candidateModels = ['gemini-flash-latest', 'gemini-3.1-flash-lite', 'gemini-3.8-flash'];
       let batchResponse: any = null;
       let lastError: any = null;
 
@@ -167,13 +183,13 @@ Allowed question types to include: ${types.join(', ')}. Please balance the reque
                 properties: {
                   questions: {
                     type: Type.ARRAY,
-                    description: "List of completely unique questions matching the criteria.",
+                    description: "List of authentic, topic-specific questions generated by Gemini AI.",
                     items: {
                       type: Type.OBJECT,
                       properties: {
                         question: {
                           type: Type.STRING,
-                          description: "The clear, student-friendly question text or statement. MUST be completely unique and distinct."
+                          description: "The clear, student-friendly question text testing actual topic content."
                         },
                         type: {
                           type: Type.STRING,
@@ -189,7 +205,7 @@ Allowed question types to include: ${types.join(', ')}. Please balance the reque
                         },
                         options: {
                           type: Type.ARRAY,
-                          description: "Mandatory for 'mcq' and 'true_false'. For 'true_false' it must have exactly 2 options with ids 'opt_t' (TRUE) and 'opt_f' (FALSE). For 'mcq', it must have 3-4 options with unique ids like 'opt_1', 'opt_2', etc.",
+                          description: "Mandatory for 'mcq' and 'true_false'. For 'true_false' it must have exactly 2 options with ids 'opt_t' and 'opt_f'. For 'mcq', it must have 3-4 options with unique ids like 'opt_1', 'opt_2', etc.",
                           items: {
                             type: Type.OBJECT,
                             properties: {
@@ -205,11 +221,11 @@ Allowed question types to include: ${types.join(', ')}. Please balance the reque
                         },
                         correctAnswerText: {
                           type: Type.STRING,
-                          description: "The correct answer text. Mandatory for 'short_answer'. Leave empty for other types."
+                          description: "The exact correct answer text. Mandatory for 'short_answer'."
                         },
                         explanation: {
                           type: Type.STRING,
-                          description: "A short, engaging explanation of why the answer is correct."
+                          description: "An educational explanation of why the answer is correct."
                         }
                       },
                       required: ["question", "type", "points", "timer", "explanation"]
@@ -252,7 +268,7 @@ Allowed question types to include: ${types.join(', ')}. Please balance the reque
     }
 
     if (collectedQuestions.length === 0) {
-      throw new Error('All candidate models failed or returned no valid questions.');
+      throw new Error('Gemini API did not return any valid questions for the specified topic/prompt. Please check your prompt and try again.');
     }
 
     // Return the guaranteed unique questions up to targetCount
@@ -269,6 +285,20 @@ Allowed question types to include: ${types.join(', ')}. Please balance the reque
     } catch (_) {}
     res.status(500).json({ error: errMsg });
   }
+});
+
+// API 404 fallback to ensure /api/* requests never return HTML index.html
+app.use('/api/*', (_req, res) => {
+  res.status(404).json({ error: 'API endpoint not found.' });
+});
+
+// Global API error handler returning JSON for /api/*
+app.use((err: any, req: any, res: any, next: any) => {
+  if (req.path.startsWith('/api/')) {
+    console.error('API Error:', err);
+    return res.status(500).json({ error: err?.message || 'Internal Server Error' });
+  }
+  next(err);
 });
 
 async function startServer() {
