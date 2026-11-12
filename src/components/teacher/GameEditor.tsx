@@ -698,10 +698,10 @@ export const GameEditor: React.FC<GameEditorProps> = ({
               setShowTextTemplateModal(true);
             }}
             className="px-2.5 py-1.5 rounded-lg bg-emerald-50 border border-emerald-300 hover:bg-emerald-100 text-emerald-800 font-bold text-xs flex items-center gap-1 transition-colors cursor-pointer"
-            title="Salin Text Template Prompt untuk generate soalan di mana-mana AI (ChatGPT, Claude, Gemini, dll.)"
+            title="Import teks soalan hasil penjanaan daripada mana-mana AI (ChatGPT, Claude, Gemini, dll.)"
           >
             <FileText className="w-3.5 h-3.5 text-emerald-600" />
-            <span className="hidden sm:inline">Text Template</span>
+            <span className="hidden sm:inline">Import Teks AI</span>
           </button>
 
           <button
