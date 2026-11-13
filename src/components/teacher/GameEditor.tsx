@@ -1119,7 +1119,6 @@ export const GameEditor: React.FC<GameEditorProps> = ({
                     <option value="steal">⚡ STEAL POINTS (Take points from rival team)</option>
                     <option value="swap">🔄 SWAP POINTS (Trade score totals between 2 teams)</option>
                     <option value="bonus">🎁 BONUS POINTS (Free points gift)</option>
-                    <option value="double">✨ DOUBLE POINTS (Next answer worth 2x)</option>
                     <option value="lose_points">💥 LOSE POINTS (Penalty deduction)</option>
                     <option value="reset">🔄 RESET SCORE (Reset team score to zero)</option>
                     <option value="random_bonus">🎲 RANDOM BONUS (Random 5 to 50 points)</option>
@@ -1301,7 +1300,7 @@ export const GameEditor: React.FC<GameEditorProps> = ({
                 <label className="flex items-center justify-between cursor-pointer">
                   <div>
                     <p className="font-bold text-slate-900">Enable Mystery Power-Up Cards</p>
-                    <p className="text-slate-500 text-[11px]">Steal, Swap, Bonus, and Double cards</p>
+                    <p className="text-slate-500 text-[11px]">Steal, Swap, Bonus, and Mystery cards</p>
                   </div>
                   <input
                     type="checkbox"

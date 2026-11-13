@@ -114,8 +114,8 @@ function buildMysteryDeck(
     },
     {
       type: 'swap',
-      question: '🔄 SCORE SWAP! Trade score totals between any two teams!',
-      explanation: 'Pick two teams to exchange their total scores. A complete game changer!',
+      question: '🔄 SCORE SWAP! Swap your score with any rival team!',
+      explanation: 'Choose a rival team from the dropdown to exchange total scores with your team!',
       pts: 0,
     },
     {
@@ -129,12 +129,6 @@ function buildMysteryDeck(
       question: '🎉 JACKPOT WIN! Huge +35 points prize straight to your team!',
       explanation: 'Maximum excitement! An instant +35 points massive boost.',
       pts: 35,
-    },
-    {
-      type: 'double',
-      question: '✨ 2X DOUBLE POINTS ACTIVATED! Giliran seterusnya mendapat 2X ganda markah jika jawab betul!',
-      explanation: 'High stakes mode! Your team will receive 2X points if you answer correctly on your next turn.',
-      pts: 0,
     },
     {
       type: 'lose_points',
@@ -282,8 +276,7 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
   // In-card special power execution state
   const [specialExecuted, setSpecialExecuted] = useState(false);
   const [specialStealTarget, setSpecialStealTarget] = useState<string>('');
-  const [specialSwapTargetA, setSpecialSwapTargetA] = useState<string>('');
-  const [specialSwapTargetB, setSpecialSwapTargetB] = useState<string>('');
+  const [specialSwapTarget, setSpecialSwapTarget] = useState<string>('');
 
   // Shuffled options map for questions with randomizeAnswers enabled
   const [shuffledOptionsMap, setShuffledOptionsMap] = useState<Record<string, Question['options']>>({});
@@ -367,8 +360,7 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
     // Default target teams for special cards
     const otherTeams = session.teams.filter((t) => t.id !== currentTurnTeamId);
     setSpecialStealTarget(otherTeams[0]?.id || session.teams[0]?.id || '');
-    setSpecialSwapTargetA(currentTurnTeamId);
-    setSpecialSwapTargetB(otherTeams[0]?.id || session.teams[1]?.id || session.teams[0]?.id || '');
+    setSpecialSwapTarget(otherTeams[0]?.id || '');
 
     // If it is a special card, surprise sound + confetti!
     if (q.type === 'special') {
@@ -436,22 +428,16 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
     if (!activeQuestion) return;
 
     setIsTimerActive(false);
-    const basePoints = overridePoints !== undefined ? overridePoints : activeQuestion.points;
-    const hasTeamDouble = Boolean(session.doublePointsTeamIds?.includes(currentTurnTeamId));
-    const isDoubleApplied = Boolean(session.currentQuestionDoublePoints || hasTeamDouble);
-    let points = basePoints;
+    let points = overridePoints !== undefined ? overridePoints : activeQuestion.points;
 
     if (isCorrect) {
-      if (isDoubleApplied) {
-        points = basePoints * 2;
-      }
       sound.playCorrect();
       if (session.settings?.enableConfetti) {
         triggerConfetti('cannon');
       }
     } else {
       sound.playIncorrect();
-      points = session.settings?.allowNegativeScores ? -basePoints : 0;
+      points = session.settings?.allowNegativeScores ? -points : 0;
     }
 
     setOptionOutcome(isCorrect ? 'correct' : 'wrong');
@@ -462,24 +448,15 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
       currentTurnTeamId,
       points,
       'question_score',
-      `Card ${activeQuestion.order || 1}: ${
-        isCorrect
-          ? `Correct (+${points}${isDoubleApplied ? ' [2X!]' : ''})`
-          : `Incorrect (${points})`
-      }`,
+      `Card ${activeQuestion.order || 1}: ${isCorrect ? 'Correct (+' + points + ')' : 'Incorrect (0)'}`,
       activeQuestion.id,
       activeQuestion.order || 1
     );
 
     const nextAnswered = Array.from(new Set([...session.answeredQuestionIds, activeQuestion.id]));
-    const nextDoubleTeamIds = (session.doublePointsTeamIds || []).filter(
-      (id) => id !== currentTurnTeamId
-    );
     const updated: Partial<GameSession> = {
       ...updatedSession,
       answeredQuestionIds: nextAnswered,
-      doublePointsTeamIds: nextDoubleTeamIds,
-      currentQuestionDoublePoints: isCorrect && isDoubleApplied,
       answersRevealed: true,
       status: 'answer_revealed',
       isTimerRunning: false,
@@ -506,15 +483,9 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
     const isCorrect = optId === activeQuestion.correctOptionId;
     setOptionOutcome(isCorrect ? 'correct' : 'wrong');
 
-    const basePoints = activeQuestion.points;
-    const hasTeamDouble = Boolean(session.doublePointsTeamIds?.includes(currentTurnTeamId));
-    const isDoubleApplied = Boolean(session.currentQuestionDoublePoints || hasTeamDouble);
-    let points = basePoints;
+    let points = activeQuestion.points;
 
     if (isCorrect) {
-      if (isDoubleApplied) {
-        points = basePoints * 2;
-      }
       sound.playCorrect();
       if (session.settings?.enableConfetti) {
         triggerConfetti('cannon');
@@ -522,7 +493,7 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
       setEarnedPoints(points);
     } else {
       sound.playIncorrect();
-      points = session.settings?.allowNegativeScores ? -basePoints : 0;
+      points = session.settings?.allowNegativeScores ? -points : 0;
       setEarnedPoints(points);
     }
 
@@ -531,24 +502,15 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
       currentTurnTeamId,
       points,
       'question_score',
-      `Card ${activeQuestion.order || 1}: ${
-        isCorrect
-          ? `Correct (+${points}${isDoubleApplied ? ' [2X!]' : ''})`
-          : `Incorrect (${points})`
-      }`,
+      `Card ${activeQuestion.order || 1}: ${isCorrect ? 'Correct (+' + points + ')' : 'Incorrect (0)'}`,
       activeQuestion.id,
       activeQuestion.order || 1
     );
 
     const nextAnswered = Array.from(new Set([...session.answeredQuestionIds, activeQuestion.id]));
-    const nextDoubleTeamIds = (session.doublePointsTeamIds || []).filter(
-      (id) => id !== currentTurnTeamId
-    );
     const updated: Partial<GameSession> = {
       ...updatedSession,
       answeredQuestionIds: nextAnswered,
-      doublePointsTeamIds: nextDoubleTeamIds,
-      currentQuestionDoublePoints: isCorrect && isDoubleApplied,
       answersRevealed: true,
       status: 'answer_revealed',
       isTimerRunning: false,
@@ -586,7 +548,6 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
       answeredQuestionIds: nextAnswered,
       status: 'board',
       currentQuestionId: null,
-      currentQuestionDoublePoints: false,
       answersRevealed: false,
       currentTeamId: nextTeamId,
     };
@@ -621,7 +582,6 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
       status: 'board',
       currentQuestionId: null,
       currentTeamId: nextTeam?.id || null,
-      currentQuestionDoublePoints: false,
       answersRevealed: false,
     };
 
@@ -661,13 +621,13 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
     setSpecialExecuted(true);
   };
 
-  // Execute Special Card: Swap Points
+  // Execute Special Card: Swap Points (current turn team swaps with selected target team)
   const handleExecuteInCardSwap = async () => {
-    if (specialSwapTargetA === specialSwapTargetB) {
-      alert('Please choose two different teams to swap.');
+    if (!specialSwapTarget || currentTurnTeamId === specialSwapTarget) {
+      alert('Please choose another team to swap scores with.');
       return;
     }
-    await executeSwapPoints(specialSwapTargetA, specialSwapTargetB);
+    await executeSwapPoints(currentTurnTeamId, specialSwapTarget);
     setSpecialExecuted(true);
   };
 
@@ -675,18 +635,6 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
   const handleExecuteInCardBonus = async () => {
     const amount = activeQuestion?.points || 25;
     await executeBonusPoints(currentTurnTeamId, amount);
-    setSpecialExecuted(true);
-  };
-
-  // Execute Special Card: Double Points (stored per team for their next question turn!)
-  const handleExecuteInCardDouble = async () => {
-    sound.playBonus();
-    if (session.settings?.enableConfetti) triggerConfetti('cannon');
-    const existing = session.doublePointsTeamIds || [];
-    const nextDoubleTeamIds = existing.includes(currentTurnTeamId)
-      ? existing
-      : [...existing, currentTurnTeamId];
-    await updateSessionState({ doublePointsTeamIds: nextDoubleTeamIds });
     setSpecialExecuted(true);
   };
 
@@ -976,15 +924,6 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
   const currentTurnTeam =
     session.teams.find((t) => t.id === currentTurnTeamId) || session.teams[0];
 
-  const hasTeamDoublePoints = (teamId: string) =>
-    Boolean(session.doublePointsTeamIds?.includes(teamId));
-
-  const isDoubleActiveForActiveQuestion = Boolean(
-    activeQuestion &&
-      activeQuestion.type !== 'special' &&
-      (session.currentQuestionDoublePoints || hasTeamDoublePoints(currentTurnTeamId))
-  );
-
   return (
     <div
       className={`h-screen max-h-screen overflow-hidden bg-slate-50 text-slate-900 flex flex-col justify-between selection:bg-indigo-500 selection:text-white ${
@@ -1080,14 +1019,6 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
                   <span className="font-extrabold text-xs sm:text-sm text-slate-800 truncate text-center">
                     {team.name}
                   </span>
-                  {hasTeamDoublePoints(team.id) && (
-                    <span
-                      className="text-[9px] font-mono font-black uppercase bg-purple-600 text-white px-1.5 py-0.2 rounded-full shrink-0 shadow-2xs animate-pulse"
-                      title="2X Double Points aktif untuk soalan giliran seterusnya!"
-                    >
-                      ✨2X
-                    </span>
-                  )}
                   {isTurn && (
                     <span className="text-[9px] font-mono font-black uppercase bg-indigo-600 text-white px-1.5 py-0.2 rounded-full shrink-0 shadow-2xs">
                       TURN
@@ -1130,22 +1061,16 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
           /* ================= QUESTION BOARD ================= */
           <div className="w-full max-w-6xl mx-auto h-full flex flex-col justify-center">
             {/* Board Subheader: Current Turn prompt */}
-            <div className="mb-2 sm:mb-3 flex flex-wrap items-center justify-between gap-2 text-xs px-1">
-              <div className="flex flex-wrap items-center gap-2">
+            <div className="mb-2 sm:mb-3 flex items-center justify-between text-xs px-1">
+              <div className="flex items-center gap-2">
                 <span className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
                   <span className="text-lg leading-none">{currentTurnTeam?.avatar}</span>
                   <span>{currentTurnTeam?.name}'s Turn</span>
                 </span>
-                {hasTeamDoublePoints(currentTurnTeamId) && (
-                  <span className="text-[11px] font-extrabold px-2.5 py-0.5 rounded-full bg-purple-600 text-white border border-purple-700 flex items-center gap-1 shadow-xs animate-pulse">
-                    <Sparkles className="w-3 h-3 text-amber-300" />
-                    <span>✨ 2X DOUBLE POINTS AKTIF! (Jawab betul = 2X markah)</span>
-                  </span>
-                )}
                 <span aria-hidden="true" className="text-slate-300 hidden sm:inline">·</span>
                 <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1 shadow-2xs">
                   <Sparkles className="w-3 h-3 text-amber-600" />
-                  <span>Power-Up Mode ({session.settings?.powerCardPercentage ?? 60}%)</span>
+                  <span>Power-Up Blitz! (Lebih Banyak Kad Kuasa)</span>
                 </span>
                 <span aria-hidden="true" className="text-slate-300 hidden md:inline">·</span>
                 <span className="text-slate-500 font-medium hidden md:inline">
@@ -1274,17 +1199,9 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
                     <span aria-hidden="true" className="text-slate-300">·</span>
                     <span className="text-slate-600 font-medium">
                       Value: <strong className="font-mono font-bold text-slate-900">
-                        {isDoubleActiveForActiveQuestion ? activeQuestion.points * 2 : activeQuestion.points} pts
+                        {activeQuestion.points} pts
                       </strong>
                     </span>
-                    {isDoubleActiveForActiveQuestion && (
-                      <>
-                        <span aria-hidden="true" className="text-slate-300">·</span>
-                        <span className="text-purple-700 font-bold bg-purple-100 px-2 py-0.5 rounded-full border border-purple-200 flex items-center gap-1">
-                          ✨ 2X Double Points
-                        </span>
-                      </>
-                    )}
                   </div>
                 </div>
               </div>
@@ -1406,45 +1323,31 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
                       {(activeQuestion.specialType === 'swap' ||
                         activeQuestion.question.toLowerCase().includes('swap')) && (
                         <div className="space-y-3">
-                          <div className="grid grid-cols-2 gap-2">
-                            <div>
-                              <label className="text-[11px] font-medium text-slate-500 block mb-1">
-                                Team 1:
-                              </label>
-                              <select
-                                value={specialSwapTargetA}
-                                onChange={(e) => setSpecialSwapTargetA(e.target.value)}
-                                className="w-full p-2 rounded-lg bg-slate-50 border border-slate-200 font-bold text-xs"
-                              >
-                                {session.teams.map((t) => (
-                                  <option key={t.id} value={t.id}>
-                                    {t.name} ({t.score})
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            <div>
-                              <label className="text-[11px] font-medium text-slate-500 block mb-1">
-                                Team 2:
-                              </label>
-                              <select
-                                value={specialSwapTargetB}
-                                onChange={(e) => setSpecialSwapTargetB(e.target.value)}
-                                className="w-full p-2 rounded-lg bg-slate-50 border border-slate-200 font-bold text-xs"
-                              >
-                                {session.teams.map((t) => (
-                                  <option key={t.id} value={t.id}>
-                                    {t.name} ({t.score})
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                          </div>
+                          <label className="text-xs font-semibold text-slate-700 block">
+                            Pilih kumpulan untuk tukar skor dengan{' '}
+                            <span className="font-extrabold text-indigo-700">
+                              {currentTurnTeam?.avatar} {currentTurnTeam?.name} ({currentTurnTeam?.score} pts)
+                            </span>
+                            :
+                          </label>
+                          <select
+                            value={specialSwapTarget}
+                            onChange={(e) => setSpecialSwapTarget(e.target.value)}
+                            className="w-full p-2.5 rounded-lg bg-slate-50 border border-slate-200 font-bold text-slate-900 text-xs"
+                          >
+                            {session.teams
+                              .filter((t) => t.id !== currentTurnTeamId)
+                              .map((t) => (
+                                <option key={t.id} value={t.id}>
+                                  {t.avatar} {t.name} ({t.score} pts)
+                                </option>
+                              ))}
+                          </select>
                           <button
                             onClick={handleExecuteInCardSwap}
                             className="w-full py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs uppercase tracking-wider shadow-2xs transition-colors cursor-pointer"
                           >
-                            🔄 Swap Team Scores Now
+                            🔄 Tukar Skor Sekarang
                           </button>
                         </div>
                       )}
@@ -1457,17 +1360,6 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
                           className="w-full py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs uppercase tracking-wider shadow-2xs transition-colors cursor-pointer"
                         >
                           🎁 Award +{activeQuestion.points || 25} Points to {currentTurnTeam?.name}
-                        </button>
-                      )}
-
-                      {/* Double Power */}
-                      {(activeQuestion.specialType === 'double' ||
-                        activeQuestion.question.toLowerCase().includes('double')) && (
-                        <button
-                          onClick={handleExecuteInCardDouble}
-                          className="w-full py-2.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs uppercase tracking-wider shadow-2xs transition-colors cursor-pointer"
-                        >
-                          ✨ Activate 2X Double Points for {currentTurnTeam?.name}
                         </button>
                       )}
 
@@ -1889,11 +1781,7 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
                       className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" />
-                      Correct (+
-                      {isDoubleActiveForActiveQuestion
-                        ? activeQuestion.points * 2
-                        : activeQuestion.points}
-                      )
+                      Correct (+{activeQuestion.points})
                     </button>
                   </>
                 )}
@@ -1926,19 +1814,6 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
           onBonus={executeBonusPoints}
           onRandomBonus={executeRandomBonus}
           onResetScore={executeResetScore}
-          onDoublePoints={() => {
-            sound.playBonus();
-            if (activeQuestion && activeQuestion.type !== 'special') {
-              updateSessionState({ currentQuestionDoublePoints: true });
-            } else {
-              const existing = session.doublePointsTeamIds || [];
-              const nextDoubleTeamIds = existing.includes(currentTurnTeamId)
-                ? existing
-                : [...existing, currentTurnTeamId];
-              updateSessionState({ doublePointsTeamIds: nextDoubleTeamIds });
-            }
-            setShowPowerUpsModal(false);
-          }}
         />
       )}
 
@@ -2039,7 +1914,6 @@ interface PowerUpsModalProps {
   onBonus: (teamId: string, amount: number) => void;
   onRandomBonus: (teamId: string) => void;
   onResetScore: (teamId: string) => void;
-  onDoublePoints: () => void;
 }
 
 const PowerUpsModal: React.FC<PowerUpsModalProps> = ({
@@ -2050,9 +1924,8 @@ const PowerUpsModal: React.FC<PowerUpsModalProps> = ({
   onBonus,
   onRandomBonus,
   onResetScore,
-  onDoublePoints,
 }) => {
-  const [activeTab, setActiveTab] = useState<'steal' | 'swap' | 'bonus' | 'double' | 'reset'>('steal');
+  const [activeTab, setActiveTab] = useState<'steal' | 'swap' | 'bonus' | 'reset'>('steal');
 
   const [stealSource, setStealSource] = useState(session.teams[0]?.id || '');
   const [stealTarget, setStealTarget] = useState(
@@ -2129,7 +2002,7 @@ const PowerUpsModal: React.FC<PowerUpsModalProps> = ({
         </div>
 
         {/* Tab Selector */}
-        <div className="grid grid-cols-5 gap-1 bg-slate-100 p-1 rounded-xl mb-4 text-xs font-semibold">
+        <div className="grid grid-cols-4 gap-1 bg-slate-100 p-1 rounded-xl mb-4 text-xs font-semibold">
           <button
             onClick={() => setActiveTab('steal')}
             className={`py-1.5 rounded-lg transition-all cursor-pointer ${
@@ -2159,16 +2032,6 @@ const PowerUpsModal: React.FC<PowerUpsModalProps> = ({
             }`}
           >
             Bonus
-          </button>
-          <button
-            onClick={() => setActiveTab('double')}
-            className={`py-1.5 rounded-lg transition-all cursor-pointer ${
-              activeTab === 'double'
-                ? 'bg-purple-600 text-white font-bold shadow-2xs'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            Double
           </button>
           <button
             onClick={() => setActiveTab('reset')}
@@ -2341,23 +2204,7 @@ const PowerUpsModal: React.FC<PowerUpsModalProps> = ({
           </div>
         )}
 
-        {/* Tab 4: Double Points */}
-        {activeTab === 'double' && (
-          <div className="space-y-4 text-xs text-center py-3">
-            <Sparkles className="w-8 h-8 text-purple-600 mx-auto" />
-            <p className="text-slate-600 leading-relaxed font-medium">
-              Activate <strong className="text-slate-900">2X DOUBLE POINTS</strong> on the active question card. The winning team will receive twice the standard points value.
-            </p>
-            <button
-              onClick={onDoublePoints}
-              className="w-full py-2.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs uppercase tracking-wider shadow-2xs transition-colors cursor-pointer"
-            >
-              Activate Double Points Now
-            </button>
-          </div>
-        )}
-
-        {/* Tab 5: Reset */}
+        {/* Tab 4: Reset */}
         {activeTab === 'reset' && (
           <div className="space-y-3 text-xs">
             <div>

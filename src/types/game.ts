@@ -10,7 +10,6 @@ export type SpecialCardType =
   | 'steal'
   | 'swap'
   | 'bonus'
-  | 'double'
   | 'lose_points'
   | 'reset'
   | 'random_bonus'
@@ -138,8 +137,6 @@ export interface GameSession {
   timerRemaining?: number;
   isTimerRunning?: boolean;
   answersRevealed?: boolean;
-  currentQuestionDoublePoints?: boolean;
-  doublePointsTeamIds?: string[];
   playerAnswers?: Record<string, PlayerAnswerSubmission>; // keyed by playerId
   startedAt: number;
   updatedAt: number;

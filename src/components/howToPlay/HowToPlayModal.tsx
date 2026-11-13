@@ -95,10 +95,10 @@ export const HowToPlayModal: React.FC<HowToPlayModalProps> = ({ isOpen, onClose 
               </div>
               <div className="p-3 bg-purple-50/70 border border-purple-200 rounded-xl">
                 <span className="font-bold text-purple-900 flex items-center gap-1">
-                  ✨ DOUBLE POINTS
+                  🎲 MYSTERY CRATE
                 </span>
                 <p className="text-slate-600 mt-1">
-                  The selected question awards 2x its standard points value!
+                  Roll the dice for surprise bonus points (10 to 50 points)!
                 </p>
               </div>
             </div>

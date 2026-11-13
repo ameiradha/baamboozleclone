@@ -354,7 +354,7 @@ export const DEMO_GAME: Game = {
     allowNegativeScores: true,
     automaticScoring: true,
     enableConfetti: true,
-    allowedSpecialTypes: ['steal', 'swap', 'bonus', 'double', 'lose_points', 'reset', 'random_bonus', 'skip', 'free_choice'],
+    allowedSpecialTypes: ['steal', 'swap', 'bonus', 'lose_points', 'reset', 'random_bonus', 'skip', 'free_choice'],
   },
   questions: DEMO_QUESTIONS,
 };

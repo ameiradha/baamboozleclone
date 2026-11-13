@@ -237,8 +237,6 @@ export class GameService {
         timerRemaining: game.settings?.defaultTimerSeconds || 25,
         isTimerRunning: false,
         answersRevealed: false,
-        currentQuestionDoublePoints: false,
-        doublePointsTeamIds: [],
         playerAnswers: {},
         startedAt: Date.now(),
         updatedAt: Date.now(),
