@@ -68,6 +68,7 @@ export const GameEditor: React.FC<GameEditorProps> = ({
       defaultTimerSeconds: 25,
       enablePowerUps: true,
       enableSpecialCards: true,
+      powerCardPercentage: 60,
       randomizeQuestions: false,
       randomizeAnswers: false,
       enableSounds: true,
@@ -1268,7 +1269,7 @@ export const GameEditor: React.FC<GameEditorProps> = ({
       {/* Settings Modal */}
       {showSettingsModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in duration-150">
-          <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full border border-slate-200 p-6">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full border border-slate-200 p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-4">
               <div className="flex items-center gap-2">
                 <Settings className="w-5 h-5 text-indigo-600" />
@@ -1296,18 +1297,88 @@ export const GameEditor: React.FC<GameEditorProps> = ({
                 />
               </label>
 
-              <label className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-200 cursor-pointer">
-                <div>
-                  <p className="font-bold text-slate-900">Enable Mystery Power-Up Cards</p>
-                  <p className="text-slate-500 text-[11px]">Steal, Swap, Bonus, and Double cards</p>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={settings.enablePowerUps}
-                  onChange={(e) => setSettings({ ...settings, enablePowerUps: e.target.checked })}
-                  className="w-5 h-5 rounded text-indigo-600 focus:ring-indigo-500"
-                />
-              </label>
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                <label className="flex items-center justify-between cursor-pointer">
+                  <div>
+                    <p className="font-bold text-slate-900">Enable Mystery Power-Up Cards</p>
+                    <p className="text-slate-500 text-[11px]">Steal, Swap, Bonus, and Double cards</p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={settings.enablePowerUps}
+                    onChange={(e) => {
+                      setSaveStatus('unsaved');
+                      setSettings({
+                        ...settings,
+                        enablePowerUps: e.target.checked,
+                        powerCardPercentage: e.target.checked ? (settings.powerCardPercentage || 60) : 0,
+                      });
+                    }}
+                    className="w-5 h-5 rounded text-indigo-600 focus:ring-indigo-500"
+                  />
+                </label>
+
+                {settings.enablePowerUps && (
+                  <div className="pt-2.5 border-t border-slate-200/80 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-purple-900 flex items-center gap-1">
+                        <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-400" />
+                        Peratus Power Card Semasa Kuiz:
+                      </span>
+                      <span className="font-mono font-extrabold text-purple-700 bg-purple-100 px-2 py-0.5 rounded-md">
+                        {settings.powerCardPercentage ?? 60}%
+                      </span>
+                    </div>
+
+                    <input
+                      type="range"
+                      min={10}
+                      max={85}
+                      step={5}
+                      value={settings.powerCardPercentage ?? 60}
+                      onChange={(e) => {
+                        setSaveStatus('unsaved');
+                        setSettings({ ...settings, powerCardPercentage: Number(e.target.value) });
+                      }}
+                      className="w-full accent-purple-600 cursor-pointer h-1.5"
+                    />
+
+                    <div className="flex flex-wrap gap-1.5">
+                      {[
+                        { pct: 25, label: '25% (Sedikit)' },
+                        { pct: 50, label: '50% (Sama Banyak)' },
+                        { pct: 60, label: '60% (Lebih Banyak)' },
+                        { pct: 75, label: '75% (Maksimum)' },
+                      ].map((opt) => (
+                        <button
+                          key={opt.pct}
+                          type="button"
+                          onClick={() => {
+                            sound.playClick();
+                            setSaveStatus('unsaved');
+                            setSettings({ ...settings, powerCardPercentage: opt.pct });
+                          }}
+                          className={`px-2 py-1 rounded-lg font-bold text-[11px] transition-colors cursor-pointer ${
+                            (settings.powerCardPercentage ?? 60) === opt.pct
+                              ? 'bg-purple-600 text-white shadow-2xs'
+                              : 'bg-white border border-purple-200 text-purple-800 hover:bg-purple-50'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <p className="text-[11px] text-slate-500">
+                      {(settings.powerCardPercentage ?? 60) === 50
+                        ? 'Bilangan Power Card sama banyak dengan kad soalan (50% / 50%).'
+                        : (settings.powerCardPercentage ?? 60) > 50
+                        ? `Power Card lebih banyak (${settings.powerCardPercentage ?? 60}%) berbanding soalan (${100 - (settings.powerCardPercentage ?? 60)}%) supaya lebih menyeronokkan.`
+                        : `Lebih fokus kepada soalan (${100 - (settings.powerCardPercentage ?? 60)}%) dengan sedikit Power Card (${settings.powerCardPercentage ?? 60}%).`}
+                    </p>
+                  </div>
+                )}
+              </div>
 
               <label className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-200 cursor-pointer">
                 <div>

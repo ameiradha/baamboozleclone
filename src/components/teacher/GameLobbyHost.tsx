@@ -18,6 +18,7 @@ import {
   Sparkles,
   Gamepad2,
   HelpCircle,
+  Zap,
 } from 'lucide-react';
 import { Game, GameSession, Team, Player } from '../../types/game';
 import { GameService } from '../../services/gameService';
@@ -66,6 +67,10 @@ export const GameLobbyHost: React.FC<GameLobbyHostProps> = ({
   const [cardsMultiplier, setCardsMultiplier] = useState<2 | 3 | 10>(
     session.settings?.cardsPerTeamMultiplier || 3
   );
+  const [powerCardPct, setPowerCardPct] = useState<number>(() => {
+    if (session.settings?.enablePowerUps === false) return 0;
+    return session.settings?.powerCardPercentage ?? 60;
+  });
 
   // Subscribe to real-time session updates (if any devices join)
   useEffect(() => {
@@ -207,6 +212,8 @@ export const GameLobbyHost: React.FC<GameLobbyHostProps> = ({
       settings: {
         ...currentSession.settings,
         cardsPerTeamMultiplier: cardsMultiplier,
+        enablePowerUps: powerCardPct > 0,
+        powerCardPercentage: powerCardPct,
       },
       updatedAt: Date.now(),
     };
@@ -215,6 +222,14 @@ export const GameLobbyHost: React.FC<GameLobbyHostProps> = ({
   };
 
   const teamCount = currentSession.teams.length;
+  const totalBoardCards = Math.max(game.questions?.length || 0, cardsMultiplier * teamCount, 4);
+  const previewPowerCount =
+    powerCardPct <= 0
+      ? 0
+      : totalBoardCards > 1
+      ? Math.min(totalBoardCards - 1, Math.max(1, Math.round(totalBoardCards * (powerCardPct / 100))))
+      : 0;
+  const previewQuestionCount = totalBoardCards - previewPowerCount;
 
   return (
     <div className="h-full max-h-full flex flex-col justify-between p-3 sm:p-4 max-w-6xl mx-auto w-full overflow-hidden">
@@ -238,7 +253,9 @@ export const GameLobbyHost: React.FC<GameLobbyHostProps> = ({
                   PIN: {currentSession.pin}
                 </span>
                 <span aria-hidden="true" className="text-slate-300">·</span>
-                <span className="font-semibold text-slate-700">{cardsMultiplier * teamCount} Cards Total ({cardsMultiplier}× per team)</span>
+                <span className="font-semibold text-slate-700">
+                  {totalBoardCards} Cards ({previewPowerCount} Power • {previewQuestionCount} Soalan)
+                </span>
               </div>
             </div>
           </div>
@@ -307,6 +324,55 @@ export const GameLobbyHost: React.FC<GameLobbyHostProps> = ({
                 {num}
               </button>
             ))}
+          </div>
+        </div>
+
+        {/* Power Card Percentage Selector */}
+        <div className="mt-2.5 pt-2.5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2.5 text-xs">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="font-bold text-purple-900 flex items-center gap-1 mr-0.5">
+              <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-400" />
+              <span>Power Card:</span>
+            </span>
+            {[
+              { pct: 0, label: '0% (Tiada)' },
+              { pct: 25, label: '25%' },
+              { pct: 50, label: '50% (Sama Banyak)' },
+              { pct: 60, label: '60% (Lebih)' },
+              { pct: 75, label: '75% (Maksimum)' },
+            ].map((opt) => (
+              <button
+                key={opt.pct}
+                type="button"
+                onClick={() => {
+                  sound.playClick();
+                  setPowerCardPct(opt.pct);
+                }}
+                className={`px-2.5 py-1 rounded-lg font-bold transition-colors cursor-pointer ${
+                  powerCardPct === opt.pct
+                    ? 'bg-purple-600 text-white shadow-2xs'
+                    : 'bg-purple-50 hover:bg-purple-100 text-purple-900 border border-purple-200/80'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2.5 min-w-[200px]">
+            <input
+              type="range"
+              min={0}
+              max={85}
+              step={5}
+              value={powerCardPct}
+              onChange={(e) => setPowerCardPct(Number(e.target.value))}
+              className="w-28 sm:w-36 accent-purple-600 cursor-pointer h-1.5"
+              title="Laras peratus Power Card (0% - 85%)"
+            />
+            <span className="font-mono font-extrabold text-purple-800 bg-purple-50 border border-purple-200 px-2 py-0.5 rounded-md whitespace-nowrap">
+              {powerCardPct}% ({previewPowerCount}⚡ / {previewQuestionCount}❓)
+            </span>
           </div>
         </div>
       </div>

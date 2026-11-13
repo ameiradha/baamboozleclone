@@ -49,6 +49,7 @@ export interface GameSettings {
   defaultTimerSeconds: number;
   enablePowerUps: boolean;
   enableSpecialCards: boolean;
+  powerCardPercentage?: number; // Percentage of board cards that are power-up cards (0-90)
   randomizeQuestions: boolean;
   randomizeAnswers: boolean;
   enableSounds: boolean;
@@ -138,6 +139,7 @@ export interface GameSession {
   isTimerRunning?: boolean;
   answersRevealed?: boolean;
   currentQuestionDoublePoints?: boolean;
+  doublePointsTeamIds?: string[];
   playerAnswers?: Record<string, PlayerAnswerSubmission>; // keyed by playerId
   startedAt: number;
   updatedAt: number;

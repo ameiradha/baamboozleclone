@@ -55,7 +55,9 @@ interface LiveGameHostProps {
 function buildMysteryDeck(
   rawQuestions: Question[],
   teamCount: number = 4,
-  multiplier: number = 3
+  multiplier: number = 3,
+  enablePowerUps: boolean = true,
+  powerCardPercentage: number = 60
 ): Question[] {
   if (!rawQuestions || rawQuestions.length === 0) return [];
 
@@ -63,11 +65,15 @@ function buildMysteryDeck(
   const validMultiplier = multiplier === 10 ? 10 : multiplier === 2 ? 2 : 3;
   const targetCount = Math.max(rawQuestions.length, teamCount * validMultiplier, 4);
 
+  // Separate regular quiz questions so powerCardPercentage controls the exact ratio cleanly
+  const regularQuestions = rawQuestions.filter((q) => q.type !== 'special');
+  const sourceQuestions = regularQuestions.length > 0 ? regularQuestions : rawQuestions;
+
   // If questions are fewer than targetCount, clone questions so every card position has a question
   const pool: Question[] = [];
   let cycle = 1;
   while (pool.length < targetCount) {
-    for (const q of rawQuestions) {
+    for (const q of sourceQuestions) {
       if (pool.length >= targetCount) break;
       pool.push({
         ...q,
@@ -126,8 +132,8 @@ function buildMysteryDeck(
     },
     {
       type: 'double',
-      question: '✨ 2X DOUBLE POINTS ACTIVATED! Next turn awards double points!',
-      explanation: 'High stakes mode! The next card or answer will award double points.',
+      question: '✨ 2X DOUBLE POINTS ACTIVATED! Giliran seterusnya mendapat 2X ganda markah jika jawab betul!',
+      explanation: 'High stakes mode! Your team will receive 2X points if you answer correctly on your next turn.',
       pts: 0,
     },
     {
@@ -168,13 +174,15 @@ function buildMysteryDeck(
     },
   ];
 
-  // User Request: "perbanyakkan kad powerups supaya lebih seronok berbanding kad soalan"
-  // Make power-ups the strong majority (~60% of all cards on the board!) so power-up cards
-  // distinctly outnumber plain question cards!
-  const powersCount = Math.min(
-    targetCount - 1,
-    Math.max(Math.ceil(targetCount * 0.6), Math.floor(targetCount / 2) + 1)
-  );
+  // Respect teacher's selected power card percentage (0% = no power cards, 50% = equal, >50% = more power cards)
+  const effectivePercentage = enablePowerUps ? Math.max(0, Math.min(90, powerCardPercentage)) : 0;
+  const desiredPowers = Math.round(targetCount * (effectivePercentage / 100));
+  const powersCount =
+    effectivePercentage <= 0
+      ? 0
+      : targetCount > 1
+      ? Math.min(targetCount - 1, Math.max(1, desiredPowers))
+      : 0;
 
   // Randomize the powerups pool so each game gets an unpredictable varied selection
   const shuffledPowers = [...powerUpsPool].sort(() => Math.random() - 0.5);
@@ -233,12 +241,14 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // Deck of cards with count strictly double or triple by the number of teams
+  // Deck of cards configured by team multiplier and teacher's chosen power card percentage
   const [boardCards] = useState<Question[]>(() =>
     buildMysteryDeck(
       game.questions || [],
       initialSession.teams.length,
-      initialSession.settings?.cardsPerTeamMultiplier || 3
+      initialSession.settings?.cardsPerTeamMultiplier || 3,
+      initialSession.settings?.enablePowerUps !== false,
+      initialSession.settings?.powerCardPercentage ?? 60
     )
   );
 
@@ -426,19 +436,22 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
     if (!activeQuestion) return;
 
     setIsTimerActive(false);
-    let points = overridePoints !== undefined ? overridePoints : activeQuestion.points;
-    if (session.currentQuestionDoublePoints) {
-      points *= 2;
-    }
+    const basePoints = overridePoints !== undefined ? overridePoints : activeQuestion.points;
+    const hasTeamDouble = Boolean(session.doublePointsTeamIds?.includes(currentTurnTeamId));
+    const isDoubleApplied = Boolean(session.currentQuestionDoublePoints || hasTeamDouble);
+    let points = basePoints;
 
     if (isCorrect) {
+      if (isDoubleApplied) {
+        points = basePoints * 2;
+      }
       sound.playCorrect();
       if (session.settings?.enableConfetti) {
         triggerConfetti('cannon');
       }
     } else {
       sound.playIncorrect();
-      points = session.settings?.allowNegativeScores ? -points : 0;
+      points = session.settings?.allowNegativeScores ? -basePoints : 0;
     }
 
     setOptionOutcome(isCorrect ? 'correct' : 'wrong');
@@ -449,15 +462,24 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
       currentTurnTeamId,
       points,
       'question_score',
-      `Card ${activeQuestion.order || 1}: ${isCorrect ? 'Correct (+' + points + ')' : 'Incorrect (0)'}`,
+      `Card ${activeQuestion.order || 1}: ${
+        isCorrect
+          ? `Correct (+${points}${isDoubleApplied ? ' [2X!]' : ''})`
+          : `Incorrect (${points})`
+      }`,
       activeQuestion.id,
       activeQuestion.order || 1
     );
 
     const nextAnswered = Array.from(new Set([...session.answeredQuestionIds, activeQuestion.id]));
+    const nextDoubleTeamIds = (session.doublePointsTeamIds || []).filter(
+      (id) => id !== currentTurnTeamId
+    );
     const updated: Partial<GameSession> = {
       ...updatedSession,
       answeredQuestionIds: nextAnswered,
+      doublePointsTeamIds: nextDoubleTeamIds,
+      currentQuestionDoublePoints: isCorrect && isDoubleApplied,
       answersRevealed: true,
       status: 'answer_revealed',
       isTimerRunning: false,
@@ -484,12 +506,15 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
     const isCorrect = optId === activeQuestion.correctOptionId;
     setOptionOutcome(isCorrect ? 'correct' : 'wrong');
 
-    let points = activeQuestion.points;
-    if (session.currentQuestionDoublePoints) {
-      points *= 2;
-    }
+    const basePoints = activeQuestion.points;
+    const hasTeamDouble = Boolean(session.doublePointsTeamIds?.includes(currentTurnTeamId));
+    const isDoubleApplied = Boolean(session.currentQuestionDoublePoints || hasTeamDouble);
+    let points = basePoints;
 
     if (isCorrect) {
+      if (isDoubleApplied) {
+        points = basePoints * 2;
+      }
       sound.playCorrect();
       if (session.settings?.enableConfetti) {
         triggerConfetti('cannon');
@@ -497,7 +522,7 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
       setEarnedPoints(points);
     } else {
       sound.playIncorrect();
-      points = session.settings?.allowNegativeScores ? -points : 0;
+      points = session.settings?.allowNegativeScores ? -basePoints : 0;
       setEarnedPoints(points);
     }
 
@@ -506,15 +531,24 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
       currentTurnTeamId,
       points,
       'question_score',
-      `Card ${activeQuestion.order || 1}: ${isCorrect ? 'Correct (+' + points + ')' : 'Incorrect (0)'}`,
+      `Card ${activeQuestion.order || 1}: ${
+        isCorrect
+          ? `Correct (+${points}${isDoubleApplied ? ' [2X!]' : ''})`
+          : `Incorrect (${points})`
+      }`,
       activeQuestion.id,
       activeQuestion.order || 1
     );
 
     const nextAnswered = Array.from(new Set([...session.answeredQuestionIds, activeQuestion.id]));
+    const nextDoubleTeamIds = (session.doublePointsTeamIds || []).filter(
+      (id) => id !== currentTurnTeamId
+    );
     const updated: Partial<GameSession> = {
       ...updatedSession,
       answeredQuestionIds: nextAnswered,
+      doublePointsTeamIds: nextDoubleTeamIds,
+      currentQuestionDoublePoints: isCorrect && isDoubleApplied,
       answersRevealed: true,
       status: 'answer_revealed',
       isTimerRunning: false,
@@ -644,10 +678,15 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
     setSpecialExecuted(true);
   };
 
-  // Execute Special Card: Double Points
+  // Execute Special Card: Double Points (stored per team for their next question turn!)
   const handleExecuteInCardDouble = async () => {
     sound.playBonus();
-    await updateSessionState({ currentQuestionDoublePoints: true });
+    if (session.settings?.enableConfetti) triggerConfetti('cannon');
+    const existing = session.doublePointsTeamIds || [];
+    const nextDoubleTeamIds = existing.includes(currentTurnTeamId)
+      ? existing
+      : [...existing, currentTurnTeamId];
+    await updateSessionState({ doublePointsTeamIds: nextDoubleTeamIds });
     setSpecialExecuted(true);
   };
 
@@ -937,6 +976,15 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
   const currentTurnTeam =
     session.teams.find((t) => t.id === currentTurnTeamId) || session.teams[0];
 
+  const hasTeamDoublePoints = (teamId: string) =>
+    Boolean(session.doublePointsTeamIds?.includes(teamId));
+
+  const isDoubleActiveForActiveQuestion = Boolean(
+    activeQuestion &&
+      activeQuestion.type !== 'special' &&
+      (session.currentQuestionDoublePoints || hasTeamDoublePoints(currentTurnTeamId))
+  );
+
   return (
     <div
       className={`h-screen max-h-screen overflow-hidden bg-slate-50 text-slate-900 flex flex-col justify-between selection:bg-indigo-500 selection:text-white ${
@@ -1032,6 +1080,14 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
                   <span className="font-extrabold text-xs sm:text-sm text-slate-800 truncate text-center">
                     {team.name}
                   </span>
+                  {hasTeamDoublePoints(team.id) && (
+                    <span
+                      className="text-[9px] font-mono font-black uppercase bg-purple-600 text-white px-1.5 py-0.2 rounded-full shrink-0 shadow-2xs animate-pulse"
+                      title="2X Double Points aktif untuk soalan giliran seterusnya!"
+                    >
+                      ✨2X
+                    </span>
+                  )}
                   {isTurn && (
                     <span className="text-[9px] font-mono font-black uppercase bg-indigo-600 text-white px-1.5 py-0.2 rounded-full shrink-0 shadow-2xs">
                       TURN
@@ -1074,16 +1130,22 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
           /* ================= QUESTION BOARD ================= */
           <div className="w-full max-w-6xl mx-auto h-full flex flex-col justify-center">
             {/* Board Subheader: Current Turn prompt */}
-            <div className="mb-2 sm:mb-3 flex items-center justify-between text-xs px-1">
-              <div className="flex items-center gap-2">
+            <div className="mb-2 sm:mb-3 flex flex-wrap items-center justify-between gap-2 text-xs px-1">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
                   <span className="text-lg leading-none">{currentTurnTeam?.avatar}</span>
                   <span>{currentTurnTeam?.name}'s Turn</span>
                 </span>
+                {hasTeamDoublePoints(currentTurnTeamId) && (
+                  <span className="text-[11px] font-extrabold px-2.5 py-0.5 rounded-full bg-purple-600 text-white border border-purple-700 flex items-center gap-1 shadow-xs animate-pulse">
+                    <Sparkles className="w-3 h-3 text-amber-300" />
+                    <span>✨ 2X DOUBLE POINTS AKTIF! (Jawab betul = 2X markah)</span>
+                  </span>
+                )}
                 <span aria-hidden="true" className="text-slate-300 hidden sm:inline">·</span>
                 <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1 shadow-2xs">
                   <Sparkles className="w-3 h-3 text-amber-600" />
-                  <span>Power-Up Blitz! (Lebih Banyak Kad Kuasa)</span>
+                  <span>Power-Up Mode ({session.settings?.powerCardPercentage ?? 60}%)</span>
                 </span>
                 <span aria-hidden="true" className="text-slate-300 hidden md:inline">·</span>
                 <span className="text-slate-500 font-medium hidden md:inline">
@@ -1212,13 +1274,13 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
                     <span aria-hidden="true" className="text-slate-300">·</span>
                     <span className="text-slate-600 font-medium">
                       Value: <strong className="font-mono font-bold text-slate-900">
-                        {session.currentQuestionDoublePoints ? activeQuestion.points * 2 : activeQuestion.points} pts
+                        {isDoubleActiveForActiveQuestion ? activeQuestion.points * 2 : activeQuestion.points} pts
                       </strong>
                     </span>
-                    {session.currentQuestionDoublePoints && (
+                    {isDoubleActiveForActiveQuestion && (
                       <>
                         <span aria-hidden="true" className="text-slate-300">·</span>
-                        <span className="text-purple-700 font-bold flex items-center gap-1">
+                        <span className="text-purple-700 font-bold bg-purple-100 px-2 py-0.5 rounded-full border border-purple-200 flex items-center gap-1">
                           ✨ 2X Double Points
                         </span>
                       </>
@@ -1405,7 +1467,7 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
                           onClick={handleExecuteInCardDouble}
                           className="w-full py-2.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs uppercase tracking-wider shadow-2xs transition-colors cursor-pointer"
                         >
-                          ✨ Activate 2X Double Points
+                          ✨ Activate 2X Double Points for {currentTurnTeam?.name}
                         </button>
                       )}
 
@@ -1828,7 +1890,7 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" />
                       Correct (+
-                      {session.currentQuestionDoublePoints
+                      {isDoubleActiveForActiveQuestion
                         ? activeQuestion.points * 2
                         : activeQuestion.points}
                       )
@@ -1865,7 +1927,16 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
           onRandomBonus={executeRandomBonus}
           onResetScore={executeResetScore}
           onDoublePoints={() => {
-            updateSessionState({ currentQuestionDoublePoints: true });
+            sound.playBonus();
+            if (activeQuestion && activeQuestion.type !== 'special') {
+              updateSessionState({ currentQuestionDoublePoints: true });
+            } else {
+              const existing = session.doublePointsTeamIds || [];
+              const nextDoubleTeamIds = existing.includes(currentTurnTeamId)
+                ? existing
+                : [...existing, currentTurnTeamId];
+              updateSessionState({ doublePointsTeamIds: nextDoubleTeamIds });
+            }
             setShowPowerUpsModal(false);
           }}
         />
