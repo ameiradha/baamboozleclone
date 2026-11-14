@@ -40,7 +40,7 @@ export const AnimatedScoreCounter: React.FC<AnimatedScoreCounterProps> = ({
     const startValue = displayScoreRef.current;
     const targetValue = score;
     const startTime = performance.now();
-    const duration = 650; // duration in ms
+    const duration = 360; // snappy duration in ms
 
     const step = (currentTime: number) => {
       const elapsed = currentTime - startTime;
@@ -60,7 +60,7 @@ export const AnimatedScoreCounter: React.FC<AnimatedScoreCounterProps> = ({
         fadeTimeoutRef.current = setTimeout(() => {
           setAnimDirection(null);
           setDelta(null);
-        }, 900);
+        }, 750);
       }
     };
 

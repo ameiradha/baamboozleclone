@@ -410,21 +410,45 @@ export class GameService {
     sessionId: string,
     submission: PlayerAnswerSubmission
   ): Promise<void> {
-    const session = await this.getSessionById(sessionId);
-    if (!session) return;
+    // Update LocalStorage safely without clobbering newer team scores
+    try {
+      const local = localStorage.getItem(LOCAL_SESSIONS_KEY);
+      if (local) {
+        const list: GameSession[] = JSON.parse(local);
+        const updatedList = list.map((s) => {
+          if (s.id !== sessionId) return s;
+          return {
+            ...s,
+            playerAnswers: {
+              ...(s.playerAnswers || {}),
+              [submission.playerId]: submission,
+            },
+          };
+        });
+        localStorage.setItem(LOCAL_SESSIONS_KEY, JSON.stringify(updatedList));
+      }
+    } catch {
+      // ignore
+    }
 
-    const playerAnswers = {
-      ...(session.playerAnswers || {}),
-      [submission.playerId]: submission,
-    };
-
-    const updated: GameSession = {
-      ...session,
-      playerAnswers,
-      updatedAt: Date.now(),
-    };
-
-    await this.updateSession(updated);
+    // Partial update in Firestore so team scores on the session doc are never overwritten
+    try {
+      await updateDoc(doc(db, 'gameSessions', sessionId), {
+        [`playerAnswers.${submission.playerId}`]: submission,
+      });
+    } catch (err) {
+      // Fallback if doc hasn't synced yet
+      const session = await this.getSessionById(sessionId);
+      if (!session) return;
+      const updated: GameSession = {
+        ...session,
+        playerAnswers: {
+          ...(session.playerAnswers || {}),
+          [submission.playerId]: submission,
+        },
+      };
+      await this.updateSession(updated);
+    }
   }
 
   /**

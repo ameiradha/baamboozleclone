@@ -281,15 +281,32 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
   // Shuffled options map for questions with randomizeAnswers enabled
   const [shuffledOptionsMap, setShuffledOptionsMap] = useState<Record<string, Question['options']>>({});
 
+  // Serialized background persistence queue so Firestore writes always preserve causal order without blocking UI
+  const persistQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const persistInBackground = (nextSession: GameSession, action?: GameAction) => {
+    persistQueueRef.current = persistQueueRef.current
+      .then(async () => {
+        await Promise.all([
+          GameService.updateSession(nextSession),
+          action ? GameService.recordAction(action) : Promise.resolve(),
+        ]);
+      })
+      .catch((err) => {
+        console.warn('Background session sync warning:', err);
+      });
+  };
+
   // Realtime subscription to session updates
   useEffect(() => {
     const unsub = GameService.subscribeToSession(session.id, (updated) => {
-      if (updated) {
-        setSession((prev) => ({
-          ...updated,
-          currentQuestionId: prev.currentQuestionId ?? updated.currentQuestionId,
-        }));
-      }
+      if (!updated) return;
+      setSession((prev) => ({
+        ...prev,
+        // Teacher host is authoritative for teams, scores, and board flow.
+        // Only sync incoming pupil joins & answers so stale Firestore snapshots never revert scores or trigger reverse animations.
+        players: updated.players ?? prev.players,
+        playerAnswers: updated.playerAnswers ?? prev.playerAnswers,
+      }));
     });
 
     GameService.getSessionActions(session.id).then((acts) => {
@@ -328,11 +345,13 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
     };
   }, [isTimerActive, timerSeconds]);
 
-  // Synchronize session state helper
-  const updateSessionState = async (patch: Partial<GameSession>) => {
-    const updated = { ...session, ...patch, updatedAt: Date.now() };
-    setSession(updated);
-    await GameService.updateSession(updated);
+  // Synchronize session state helper (optimistic immediate UI, background Firestore sync)
+  const updateSessionState = (patch: Partial<GameSession>) => {
+    setSession((prev) => {
+      const updated = { ...prev, ...patch, updatedAt: Date.now() };
+      persistInBackground(updated);
+      return updated;
+    });
   };
 
   // Open Question from board
@@ -464,12 +483,10 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
     };
 
     setSession(updated as GameSession);
-    await GameService.updateSession(updated as GameSession);
-
     if (recordedActions[0]) {
-      await GameService.recordAction(recordedActions[0]);
       setActionHistory((prev) => [...prev, recordedActions[0]]);
     }
+    persistInBackground(updated as GameSession, recordedActions[0]);
   };
 
   // Direct Option Click Scoring for MCQ & True/False
@@ -518,12 +535,10 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
     };
 
     setSession(updated as GameSession);
-    await GameService.updateSession(updated as GameSession);
-
     if (recordedActions[0]) {
-      await GameService.recordAction(recordedActions[0]);
       setActionHistory((prev) => [...prev, recordedActions[0]]);
     }
+    persistInBackground(updated as GameSession, recordedActions[0]);
   };
 
   // Continue to Board after answer or special card
@@ -550,6 +565,7 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
       currentQuestionId: null,
       answersRevealed: false,
       currentTeamId: nextTeamId,
+      updatedAt: Date.now(),
     };
 
     setCurrentTurnTeamId(nextTeamId);
@@ -560,7 +576,7 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
     setSpecialExecuted(false);
 
     setSession(finalSession);
-    await GameService.updateSession(finalSession);
+    persistInBackground(finalSession);
   };
 
   // Skip Question
@@ -583,6 +599,7 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
       currentQuestionId: null,
       currentTeamId: nextTeam?.id || null,
       answersRevealed: false,
+      updatedAt: Date.now(),
     };
 
     setSelectedOptionId(null);
@@ -591,11 +608,11 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
     setSpecialExecuted(false);
     setSession(finalSession);
     setActiveQuestion(null);
-    await GameService.updateSession(finalSession);
+    persistInBackground(finalSession);
   };
 
   // Return to board without marking answered
-  const handleBackToBoard = async () => {
+  const handleBackToBoard = () => {
     sound.playClick();
     setIsTimerActive(false);
     setActiveQuestion(null);
@@ -603,7 +620,7 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
     setOptionOutcome(null);
     setEarnedPoints(0);
     setSpecialExecuted(false);
-    await updateSessionState({
+    updateSessionState({
       status: 'board',
       currentQuestionId: null,
       answersRevealed: false,
@@ -611,35 +628,39 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
   };
 
   // Execute Special Card: Steal Points
-  const handleExecuteInCardSteal = async () => {
+  const handleExecuteInCardSteal = () => {
+    if (specialExecuted) return;
     if (!specialStealTarget || specialStealTarget === currentTurnTeamId) {
       alert('Please choose an opponent team to steal from.');
       return;
     }
     const amount = activeQuestion?.points || 20;
-    await executeStealPoints(currentTurnTeamId, specialStealTarget, amount);
     setSpecialExecuted(true);
+    executeStealPoints(currentTurnTeamId, specialStealTarget, amount);
   };
 
   // Execute Special Card: Swap Points (current turn team swaps with selected target team)
-  const handleExecuteInCardSwap = async () => {
+  const handleExecuteInCardSwap = () => {
+    if (specialExecuted) return;
     if (!specialSwapTarget || currentTurnTeamId === specialSwapTarget) {
       alert('Please choose another team to swap scores with.');
       return;
     }
-    await executeSwapPoints(currentTurnTeamId, specialSwapTarget);
     setSpecialExecuted(true);
+    executeSwapPoints(currentTurnTeamId, specialSwapTarget);
   };
 
   // Execute Special Card: Bonus Points
-  const handleExecuteInCardBonus = async () => {
+  const handleExecuteInCardBonus = () => {
+    if (specialExecuted) return;
     const amount = activeQuestion?.points || 25;
-    await executeBonusPoints(currentTurnTeamId, amount);
     setSpecialExecuted(true);
+    executeBonusPoints(currentTurnTeamId, amount);
   };
 
   // Execute Special Card: Trap Bomb (-15 or question points)
-  const handleExecuteInCardTrap = async () => {
+  const handleExecuteInCardTrap = () => {
+    if (specialExecuted) return;
     const penalty = Math.abs(activeQuestion?.points || 15);
     sound.playIncorrect();
     const { updatedSession, recordedActions } = ScoreService.modifyPoints(
@@ -650,17 +671,17 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
       `💣 Trap Bomb triggered! -${penalty} points to ${currentTurnTeam?.name}`
     );
     setSession(updatedSession);
-    await GameService.updateSession(updatedSession);
-    if (recordedActions[0]) {
-      await GameService.recordAction(recordedActions[0]);
-      setActionHistory((prev) => [...prev, recordedActions[0]]);
-    }
     setEarnedPoints(-penalty);
     setSpecialExecuted(true);
+    if (recordedActions[0]) {
+      setActionHistory((prev) => [...prev, recordedActions[0]]);
+    }
+    persistInBackground(updatedSession, recordedActions[0]);
   };
 
   // Execute Special Card: Rival Strike (-20 to selected rival)
-  const handleExecuteInCardRivalPenalty = async () => {
+  const handleExecuteInCardRivalPenalty = () => {
+    if (specialExecuted) return;
     if (!specialStealTarget || specialStealTarget === currentTurnTeamId) {
       alert('Please choose an opponent team to strike.');
       return;
@@ -676,16 +697,16 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
       `💥 Rival Strike by ${currentTurnTeam?.name}! -${penalty} points to ${targetTeam?.name}`
     );
     setSession(updatedSession);
-    await GameService.updateSession(updatedSession);
+    setSpecialExecuted(true);
     if (recordedActions[0]) {
-      await GameService.recordAction(recordedActions[0]);
       setActionHistory((prev) => [...prev, recordedActions[0]]);
     }
-    setSpecialExecuted(true);
+    persistInBackground(updatedSession, recordedActions[0]);
   };
 
   // Execute Special Card: Mystery Crate (Roll 10-50 points)
-  const handleExecuteInCardMystery = async () => {
+  const handleExecuteInCardMystery = () => {
+    if (specialExecuted) return;
     const roll = (Math.floor(Math.random() * 5) + 1) * 10;
     sound.playBonus();
     if (session.settings?.enableConfetti) triggerConfetti('cannon');
@@ -697,33 +718,34 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
       `🎲 Mystery Crate rolled +${roll} points for ${currentTurnTeam?.name}!`
     );
     setSession(updatedSession);
-    await GameService.updateSession(updatedSession);
-    if (recordedActions[0]) {
-      await GameService.recordAction(recordedActions[0]);
-      setActionHistory((prev) => [...prev, recordedActions[0]]);
-    }
     setEarnedPoints(roll);
     setSpecialExecuted(true);
+    if (recordedActions[0]) {
+      setActionHistory((prev) => [...prev, recordedActions[0]]);
+    }
+    persistInBackground(updatedSession, recordedActions[0]);
   };
 
   // Execute Special Card: Free Choice Bonus (+30)
-  const handleExecuteInCardFreeChoiceBonus = async () => {
-    await executeBonusPoints(currentTurnTeamId, 30);
+  const handleExecuteInCardFreeChoiceBonus = () => {
+    if (specialExecuted) return;
     setSpecialExecuted(true);
+    executeBonusPoints(currentTurnTeamId, 30);
   };
 
   // Execute Special Card: Free Choice Steal (20 from rival)
-  const handleExecuteInCardFreeChoiceSteal = async () => {
+  const handleExecuteInCardFreeChoiceSteal = () => {
+    if (specialExecuted) return;
     if (!specialStealTarget || specialStealTarget === currentTurnTeamId) {
       alert('Please choose an opponent team to steal from.');
       return;
     }
-    await executeStealPoints(currentTurnTeamId, specialStealTarget, 20);
     setSpecialExecuted(true);
+    executeStealPoints(currentTurnTeamId, specialStealTarget, 20);
   };
 
   // Power-Up: Steal Points
-  const executeStealPoints = async (sourceTeamId: string, targetTeamId: string, amount: number) => {
+  const executeStealPoints = (sourceTeamId: string, targetTeamId: string, amount: number) => {
     const { updatedSession, recordedActions } = ScoreService.stealPoints(
       session,
       sourceTeamId,
@@ -732,27 +754,25 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
     );
     sound.playSteal();
     setSession(updatedSession);
-    await GameService.updateSession(updatedSession);
     if (recordedActions[0]) {
-      await GameService.recordAction(recordedActions[0]);
       setActionHistory((prev) => [...prev, recordedActions[0]]);
     }
+    persistInBackground(updatedSession, recordedActions[0]);
   };
 
   // Power-Up: Swap Points
-  const executeSwapPoints = async (teamAId: string, teamBId: string) => {
+  const executeSwapPoints = (teamAId: string, teamBId: string) => {
     const { updatedSession, recordedActions } = ScoreService.swapPoints(session, teamAId, teamBId);
     sound.playBonus();
     setSession(updatedSession);
-    await GameService.updateSession(updatedSession);
     if (recordedActions[0]) {
-      await GameService.recordAction(recordedActions[0]);
       setActionHistory((prev) => [...prev, recordedActions[0]]);
     }
+    persistInBackground(updatedSession, recordedActions[0]);
   };
 
   // Power-Up: Bonus Points
-  const executeBonusPoints = async (teamId: string, amount: number) => {
+  const executeBonusPoints = (teamId: string, amount: number) => {
     const team = session.teams.find((t) => t.id === teamId);
     const { updatedSession, recordedActions } = ScoreService.modifyPoints(
       session,
@@ -764,53 +784,51 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
     sound.playBonus();
     if (session.settings?.enableConfetti) triggerConfetti('cannon');
     setSession(updatedSession);
-    await GameService.updateSession(updatedSession);
     if (recordedActions[0]) {
-      await GameService.recordAction(recordedActions[0]);
       setActionHistory((prev) => [...prev, recordedActions[0]]);
     }
+    persistInBackground(updatedSession, recordedActions[0]);
   };
 
   // Power-Up: Random Bonus
-  const executeRandomBonus = async (teamId: string) => {
+  const executeRandomBonus = (teamId: string) => {
     const amount = Math.floor(Math.random() * 9 + 1) * 5; // 5 to 50
     setShowRandomBonusAnim(amount);
     sound.playBonus();
     if (session.settings?.enableConfetti) triggerConfetti('cannon');
 
-    setTimeout(async () => {
+    const team = session.teams.find((t) => t.id === teamId);
+    const { updatedSession, recordedActions } = ScoreService.modifyPoints(
+      session,
+      teamId,
+      amount,
+      'random_bonus',
+      `Random Mystery Bonus of +${amount} points for ${team?.name || 'Team'}`
+    );
+    setSession(updatedSession);
+    if (recordedActions[0]) {
+      setActionHistory((prev) => [...prev, recordedActions[0]]);
+    }
+    persistInBackground(updatedSession, recordedActions[0]);
+
+    setTimeout(() => {
       setShowRandomBonusAnim(null);
-      const team = session.teams.find((t) => t.id === teamId);
-      const { updatedSession, recordedActions } = ScoreService.modifyPoints(
-        session,
-        teamId,
-        amount,
-        'random_bonus',
-        `Random Mystery Bonus of +${amount} points for ${team?.name || 'Team'}`
-      );
-      setSession(updatedSession);
-      await GameService.updateSession(updatedSession);
-      if (recordedActions[0]) {
-        await GameService.recordAction(recordedActions[0]);
-        setActionHistory((prev) => [...prev, recordedActions[0]]);
-      }
-    }, 2000);
+    }, 1500);
   };
 
   // Power-Up: Reset Score
-  const executeResetScore = async (teamId: string) => {
+  const executeResetScore = (teamId: string) => {
     const { updatedSession, recordedActions } = ScoreService.resetScore(session, teamId);
     sound.playIncorrect();
     setSession(updatedSession);
-    await GameService.updateSession(updatedSession);
     if (recordedActions[0]) {
-      await GameService.recordAction(recordedActions[0]);
       setActionHistory((prev) => [...prev, recordedActions[0]]);
     }
+    persistInBackground(updatedSession, recordedActions[0]);
   };
 
   // Quick manual point adjustment (+/-) for any team
-  const handleQuickTeamAdjust = async (e: React.MouseEvent, teamId: string, delta: number) => {
+  const handleQuickTeamAdjust = (e: React.MouseEvent, teamId: string, delta: number) => {
     e.stopPropagation();
     const team = session.teams.find((t) => t.id === teamId);
     if (!team) return;
@@ -825,15 +843,14 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
       `Manual score adjustment (${delta > 0 ? '+' : ''}${delta}) for ${team.name}`
     );
     setSession(updatedSession);
-    await GameService.updateSession(updatedSession);
     if (recordedActions[0]) {
-      await GameService.recordAction(recordedActions[0]);
       setActionHistory((prev) => [...prev, recordedActions[0]]);
     }
+    persistInBackground(updatedSession, recordedActions[0]);
   };
 
   // UNDO LAST ACTION
-  const handleUndo = async () => {
+  const handleUndo = () => {
     if (actionHistory.length === 0) {
       alert('No previous actions to undo.');
       return;
@@ -844,7 +861,7 @@ export const LiveGameHost: React.FC<LiveGameHostProps> = ({
 
     setSession(restored);
     setActionHistory((prev) => prev.slice(0, -1));
-    await GameService.updateSession(restored);
+    persistInBackground(restored);
   };
 
   // Toggle Fullscreen
